@@ -56,10 +56,8 @@ python -m invplatform.cli.gmail_invoice_finder \
 
 import argparse
 import base64
-import csv
 import datetime as dt
 import hashlib
-import json
 import logging
 import os
 import re
@@ -85,6 +83,9 @@ from ..domain import constants as domain_constants
 from ..domain import files as domain_files
 from ..domain import pdf as domain_pdf
 from ..domain import relevance as domain_relevance
+from ..usecases import duplicate_policy, provider_browser, report_io
+from ..usecases import pdf_download, pdf_verification
+from ..usecases import provider_shared
 
 DEFAULT_BROWSER_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/537.36 "
@@ -104,11 +105,11 @@ within_domain = domain_relevance.within_domain
 
 
 def now_utc_iso() -> str:
-    return dt.datetime.now(dt.timezone.utc).isoformat()
+    return provider_shared.now_utc_iso()
 
 
 def now_stamp() -> str:
-    return dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d_%H%M%S")
+    return provider_shared.now_stamp()
 
 
 # --------------------------- Keywords & heuristics ---------------------------
@@ -133,24 +134,12 @@ HAVE_PYMUPDF = getattr(domain_pdf, "HAVE_PYMUPDF", False)
 
 
 def decide_pdf_relevance(path: str, trusted_hint: bool = False) -> Tuple[bool, Dict]:
-    stats = pdf_keyword_stats(path)
-    pos_hits = stats.get("pos_hits", 0) or 0
-    neg_hits = stats.get("neg_hits", 0) or 0
-    strong_hits = stats.get("strong_hits", pos_hits) or 0
-    amount_hint = stats.get("amount_hint")
-    invoice_id_hint = stats.get("invoice_id_hint")
-    weak_only = pos_hits > 0 and strong_hits == 0
-
-    ok = pos_hits >= 1 and neg_hits == 0
-    if ok and weak_only:
-        # Weak-only hits (e.g., lone "חשבונית"/"קבלה") must also look invoice-like.
-        if not HAVE_PYMUPDF:
-            ok = True  # cannot re-evaluate structure without PDF text
-        else:
-            ok = bool(amount_hint or invoice_id_hint)
-    if trusted_hint and not pos_hits and neg_hits == 0:
-        ok = True
-    return ok, stats
+    return pdf_verification.decide_pdf_relevance_gmail(
+        path,
+        pdf_keyword_stats=pdf_keyword_stats,
+        have_pymupdf=HAVE_PYMUPDF,
+        trusted_hint=trusted_hint,
+    )
 
 
 # --------------------------- Gmail client ---------------------------
@@ -468,194 +457,36 @@ def build_tagged_name(name: str, msg_tag: str) -> Tuple[str, str]:
 def download_direct_pdf(
     url: str, referer: Optional[str] = None, ua: Optional[str] = None, verbose: bool = False
 ) -> Optional[Tuple[str, bytes]]:
-    ua = ua or DEFAULT_BROWSER_UA
-
-    def base_headers(include_referer: bool) -> Dict[str, str]:
-        hdrs: Dict[str, str] = {
-            "User-Agent": ua,
-            "Accept": "application/pdf,application/octet-stream;q=0.9,*/*;q=0.8",
-            "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
-            "Cache-Control": "no-cache",
-            "Pragma": "no-cache",
-            "Connection": "close",
-            "Upgrade-Insecure-Requests": "1",
-        }
-        if include_referer and referer:
-            hdrs["Referer"] = referer
-        host = (urlparse(url).hostname or "").lower()
-        if host.endswith("yes.co.il"):
-            hdrs.setdefault("Origin", "https://www.yes.co.il")
-            hdrs.setdefault("Sec-Fetch-Site", "cross-site")
-            hdrs.setdefault("Sec-Fetch-Mode", "navigate")
-            hdrs.setdefault("Sec-Fetch-Dest", "document")
-            hdrs.setdefault("Sec-Fetch-User", "?1")
-            hdrs.setdefault(
-                "sec-ch-ua",
-                '"Not/A)Brand";v="8", "Chromium";v="127", "Google Chrome";v="127"',
-            )
-            hdrs.setdefault("sec-ch-ua-platform", '"macOS"')
-            hdrs.setdefault("sec-ch-ua-mobile", "?0")
-        return hdrs
-
-    attempts = [True] if referer else []
-    attempts.append(False)
-
-    for include_ref in attempts:
-        try:
-            hdrs = base_headers(include_ref)
-            r = requests.get(url, headers=hdrs, timeout=30)
-            if verbose:
-                print(
-                    f"[direct_pdf] {url} ref={'yes' if include_ref and referer else 'no'} -> status={r.status_code} ct={r.headers.get('Content-Type')} size={len(r.content)}"
-                )
-            ct = (r.headers.get("Content-Type") or "").lower()
-            body = r.content
-            if r.status_code == 403 and include_ref:
-                # נסה שוב בלי referer
-                continue
-            if r.status_code == 200 and (
-                "pdf" in ct or url.lower().endswith(".pdf") or body[:4] == b"%PDF"
-            ):
-                name = "link_invoice.pdf"
-                cd = r.headers.get("Content-Disposition") or ""
-                m = re.search(r'filename\*?=(?:UTF-8\'\')?"?([^";]+)"?', cd, flags=re.I)
-                if m:
-                    name = sanitize_filename(m.group(1))
-                    if not name.lower().endswith(".pdf"):
-                        name += ".pdf"
-                return name, body
-        except Exception as e:
-            if verbose:
-                print(f"[direct_pdf] {url} error: {e}")
-            continue
-    return None
+    return pdf_download.download_direct_pdf(
+        url,
+        request_get=requests.get,
+        sanitize_filename=sanitize_filename,
+        referer=referer,
+        user_agent=ua or DEFAULT_BROWSER_UA,
+        include_yes_headers=True,
+        fallback_without_referer_on_403=True,
+        verbose=verbose,
+    )
 
 
 def yes_fetch_with_browser(  # pragma: no cover - requires real Playwright/browser
     url: str, headless: bool, verbose: bool = False
 ) -> Dict[str, object]:
-    """Attempt to render YES invoice HTML and capture embedded PDF bytes."""
-    res: Dict[str, object] = {"ok": False, "notes": []}
-    try:
-        with sync_playwright() as pw:
-            browser = pw.chromium.launch(
-                headless=headless, args=["--disable-blink-features=AutomationControlled"]
-            )
-            context = browser.new_context(
-                locale="he-IL",
-                user_agent=DEFAULT_BROWSER_UA,
-                extra_http_headers={"Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7"},
-            )
-
-            pdf_blob: Optional[bytes] = None
-            pdf_name: Optional[str] = None
-
-            def handle_response(resp):
-                nonlocal pdf_blob, pdf_name
-                if pdf_blob is not None:
-                    return
-                ct = (resp.headers.get("content-type") or "").lower()
-                if "pdf" not in ct:
-                    return
-                try:
-                    body = resp.body()
-                except Exception as e:  # pragma: no cover
-                    res["notes"].append(f"resp_body_err:{e}")
-                    return
-                if body[:4] == b"%PDF":
-                    pdf_blob = body
-                    cd = resp.headers.get("content-disposition") or ""
-                    m = re.search(r'filename\*?=(?:UTF-8\'\')?"?([^";]+)"?', cd, flags=re.I)
-                    if m:
-                        pdf_name = sanitize_filename(m.group(1))
-                    else:
-                        pdf_name = sanitize_filename(
-                            os.path.basename(urlparse(resp.url).path) or ""
-                        )
-
-            context.on("response", handle_response)
-            page = context.new_page()
-            try:
-                if verbose:
-                    print(f"[yes_browser] navigate {url}")
-                page.goto(url, wait_until="networkidle")
-                try:
-                    page.wait_for_function(
-                        "() => { const el = document.querySelector('embed,iframe,object');"
-                        " return el && el.src && el.src !== 'about:blank'; }",
-                        timeout=5000,
-                    )
-                except PWTimeout:
-                    pass
-
-                if pdf_blob is None:
-                    locator = page.locator("embed, iframe, object")
-                    count = locator.count()
-                    for idx in range(count):
-                        handle = locator.nth(idx)
-                        src = (handle.get_attribute("src") or "").strip()
-                        if not src or src == "about:blank":
-                            continue
-                        candidate_name = handle.get_attribute("name") or ""
-                        blob: Optional[bytes] = None
-                        if src.startswith("data:"):
-                            blob = _decode_data_url(src)
-                        elif src.startswith("blob:"):
-                            try:
-                                arr = page.evaluate(
-                                    """async (blobUrl) => {
-                                        const resp = await fetch(blobUrl);
-                                        const buf = await resp.arrayBuffer();
-                                        return Array.from(new Uint8Array(buf));
-                                    }""",
-                                    src,
-                                )
-                                if arr:
-                                    blob = bytes(arr)
-                            except Exception as e:  # pragma: no cover
-                                res["notes"].append(f"blob_fetch_err:{e}")
-                        else:
-                            try:
-                                resp = context.request.get(src)
-                                data = resp.body()
-                                if data[:4] == b"%PDF":
-                                    blob = data
-                                    cd = resp.headers.get("content-disposition") or ""
-                                    m = re.search(
-                                        r'filename\*?=(?:UTF-8\'\')?"?([^";]+)"?', cd, flags=re.I
-                                    )
-                                    if m:
-                                        candidate_name = m.group(1)
-                            except Exception as e:  # pragma: no cover
-                                res["notes"].append(f"http_fetch_err:{e}")
-                        if blob:
-                            pdf_blob = blob
-                            pdf_name = sanitize_filename(candidate_name or os.path.basename(src))
-                            break
-
-                if pdf_blob:
-                    res.update(
-                        {"ok": True, "name": pdf_name or "yes_invoice.pdf", "blob": pdf_blob}
-                    )
-                else:
-                    res["notes"].append("pdf_not_found")
-            except Exception as e:  # pragma: no cover - Playwright runtime
-                res["notes"].append(f"browser_err:{e}")
-            finally:
-                context.close()
-                browser.close()
-    except Exception as e:  # pragma: no cover - Playwright runtime
-        res["notes"].append(f"browser_init_err:{e}")
-    return res
+    return provider_browser.yes_fetch_with_browser(
+        url=url,
+        headless=headless,
+        verbose=verbose,
+        sync_playwright=sync_playwright,
+        playwright_timeout_error=PWTimeout,
+        user_agent=DEFAULT_BROWSER_UA,
+        sanitize_filename=sanitize_filename,
+        decode_data_url=_decode_data_url,
+    )
 
 
 # --------------------------- Bezeq (Playwright) ---------------------------
 def normalize_myinvoice_url(u: str) -> str:
-    s = (u or "").strip()
-    s = s.replace("\\?", "?").replace("\\&", "&").replace("\\=", "=")
-    s = s.replace("://myinvoice.bezeq.co.il//?", "://myinvoice.bezeq.co.il/?")
-    s = re.sub(r"(://myinvoice\.bezeq\.co\.il)/+(?=\?)", r"\1/", s)
-    return s
+    return provider_shared.normalize_myinvoice_url(u)
 
 
 def bezeq_fetch_with_api_sniff(  # pragma: no cover - Playwright/network heavy
@@ -666,137 +497,19 @@ def bezeq_fetch_with_api_sniff(  # pragma: no cover - Playwright/network heavy
     take_screens: bool,
     verbose: bool,
 ) -> Dict:
-    res = {"ok": False, "path": None, "notes": [], "normalized_url": None}
-
-    def note(x: str):
-        if verbose:
-            print(x)
-        res["notes"].append(x)
-
-    normalized_url = normalize_myinvoice_url(url)
-    res["normalized_url"] = normalized_url
-
-    with sync_playwright() as pw:
-        browser = pw.chromium.launch(
-            headless=headless, args=["--disable-blink-features=AutomationControlled"]
-        )
-        context = browser.new_context(
-            accept_downloads=True,
-            locale="he-IL",
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
-            ),
-            extra_http_headers={"Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7"},
-        )
-        if keep_trace:
-            context.tracing.start(screenshots=True, snapshots=True, sources=False)
-
-        api_urls: List[str] = []
-
-        def on_console(m):
-            try:
-                t = m.type() if callable(getattr(m, "type", None)) else str(getattr(m, "type", ""))
-                x = m.text() if callable(getattr(m, "text", None)) else str(getattr(m, "text", ""))
-                note(f"console:{t}:{x}")
-                if "GetAttachedInvoiceById" in x:
-                    mm = re.search(r"https?://[^\s\"']+GetAttachedInvoiceById[^\s\"']+", x)
-                    if mm:
-                        api_urls.append(mm.group(0))
-            except Exception:
-                pass
-
-        def on_request(req):
-            try:
-                if "GetAttachedInvoiceById" in (req.url or ""):
-                    api_urls.append(req.url)
-            except Exception:
-                pass
-
-        def on_response(resp):
-            try:
-                if "GetAttachedInvoiceById" in (resp.url or ""):
-                    api_urls.append(resp.url)
-            except Exception:
-                pass
-
-        page = context.new_page()
-        page.on("console", on_console)
-        context.on("request", on_request)
-        context.on("response", on_response)
-
-        page.goto(normalized_url, wait_until="domcontentloaded")
-        try:
-            page.wait_for_load_state("networkidle", timeout=12000)
-        except PWTimeout:
-            note("networkidle_timeout")
-
-        def direct_api(u: str) -> Optional[Tuple[str, bytes]]:
-            try:
-                resp = context.request.get(u, headers={"Referer": normalized_url})
-                body = resp.body()
-                ct = (resp.headers.get("content-type") or "").lower()
-                if (ct and "pdf" in ct) or body[:4] == b"%PDF":
-                    name = "bezeq_invoice_api.pdf"
-                    q = parse_qs(urlparse(u).query)
-                    inv_id = (q.get("InvoiceId") or [""])[0]
-                    cd = resp.headers.get("content-disposition") or ""
-                    m = re.search(r'filename\*?=(?:UTF-8\'\')?"?([^";]+)"?', cd, flags=re.I)
-                    if m:
-                        name = sanitize_filename(m.group(1))
-                        if not name.lower().endswith(".pdf"):
-                            name += ".pdf"
-                    if inv_id:
-                        stem, ext = os.path.splitext(name)
-                        name = f"{stem}__{inv_id}{ext or '.pdf'}"
-                    return name, body
-            except Exception as e:
-                note(f"direct_api_err:{e}")
-            return None
-
-        for u in list(dict.fromkeys(api_urls)):
-            r = direct_api(u)
-            if r:
-                name, blob = r
-                res["ok"] = True
-                res["path"] = (name, blob)
-                break
-
-        if not res["ok"]:
-            try:
-                for sel in [
-                    'text="להורדה"',
-                    "text=להורדה",
-                    'text="לצפייה"',
-                    "text=לצפייה",
-                    '[aria-label*="הורדה"]',
-                    '[title*="הורדה"]',
-                ]:
-                    try:
-                        page.locator(sel).first.click(timeout=2000)
-                        time.sleep(1.0)
-                        break
-                    except Exception:
-                        continue
-            except Exception:
-                pass
-            for u in list(dict.fromkeys(api_urls)):
-                r = direct_api(u)
-                if r:
-                    name, blob = r
-                    res["ok"] = True
-                    res["path"] = (name, blob)
-                    break
-
-        if keep_trace:
-            try:
-                context.tracing.stop(path=os.path.join(out_dir, f"bezeq_trace_{now_stamp()}.zip"))
-            except Exception:
-                pass
-        context.close()
-        browser.close()
-
-    return res
+    return provider_browser.bezeq_fetch_with_api_sniff(
+        url=url,
+        out_dir=out_dir,
+        headless=headless,
+        keep_trace=keep_trace,
+        take_screens=take_screens,
+        verbose=verbose,
+        sync_playwright=sync_playwright,
+        playwright_timeout_error=PWTimeout,
+        normalize_url=normalize_myinvoice_url,
+        now_stamp=now_stamp,
+        sanitize_filename=sanitize_filename,
+    )
 
 
 # --------------------------- Flow helpers ---------------------------
@@ -1052,8 +765,8 @@ def main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI orc
                     continue
                 h = sha256_bytes(blob)
                 candidate["sha256"] = h
-                if h in seen_hashes:
-                    dup_path = hash_to_saved_path.get(h)
+                if duplicate_policy.duplicate_by_hash(h, seen_hashes):
+                    dup_path = duplicate_policy.duplicate_of_hash(h, hash_to_saved_path)
                     download_report.append(
                         {
                             "msg_id": msg_id,
@@ -1088,8 +801,8 @@ def main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI orc
                 candidate["text_fingerprint"] = text_fp
 
                 if text_fp:
-                    if text_fp in seen_text_fps:
-                        dup_path = text_fp_to_path.get(text_fp)
+                    if duplicate_policy.duplicate_by_text_fingerprint(text_fp, seen_text_fps):
+                        dup_path = duplicate_policy.duplicate_of_text(text_fp, text_fp_to_path)
                         download_report.append(
                             {
                                 "msg_id": msg_id,
@@ -1149,11 +862,10 @@ def main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI orc
 
                 out_path = ensure_unique_path(inv_dir, filename or "invoice.pdf", tag=msg_tag)
                 os.replace(tmp_path, out_path)
-                seen_hashes.add(h)
-                hash_to_saved_path[h] = out_path
-                if text_fp:
-                    seen_text_fps.add(text_fp)
-                    text_fp_to_path[text_fp] = out_path
+                duplicate_policy.remember_hash(h, out_path, seen_hashes, hash_to_saved_path)
+                duplicate_policy.remember_text_fingerprint(
+                    text_fp, out_path, seen_text_fps, text_fp_to_path
+                )
                 download_report.append(
                     {
                         "msg_id": msg_id,
@@ -1227,8 +939,8 @@ def main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI orc
                     name, blob = r
                     h = sha256_bytes(blob)
                     candidate.update({"name": name, "sha256": h})
-                    if h in seen_hashes:
-                        dup_path = hash_to_saved_path.get(h)
+                    if duplicate_policy.duplicate_by_hash(h, seen_hashes):
+                        dup_path = duplicate_policy.duplicate_of_hash(h, hash_to_saved_path)
                         download_report.append(
                             {
                                 "msg_id": msg_id,
@@ -1262,8 +974,8 @@ def main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI orc
                     confidence = pdf_confidence(stats)
                     text_fp = pdf_text_fingerprint(tmp_path) if HAVE_PYMUPDF else None
                     candidate["text_fingerprint"] = text_fp
-                    if text_fp and text_fp in seen_text_fps:
-                        dup_path = text_fp_to_path.get(text_fp)
+                    if duplicate_policy.duplicate_by_text_fingerprint(text_fp, seen_text_fps):
+                        dup_path = duplicate_policy.duplicate_of_text(text_fp, text_fp_to_path)
                         download_report.append(
                             {
                                 "msg_id": msg_id,
@@ -1322,7 +1034,7 @@ def main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI orc
                         continue
 
                     tagged_name, stem_key = build_tagged_name(name, msg_tag)
-                    if stem_key in existing_stems:
+                    if duplicate_policy.duplicate_by_stem(stem_key, existing_stems):
                         os.remove(tmp_path)
                         download_report.append(
                             {
@@ -1339,12 +1051,11 @@ def main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI orc
 
                     out_path = ensure_unique_path(inv_dir, tagged_name)
                     os.replace(tmp_path, out_path)
-                    seen_hashes.add(h)
-                    hash_to_saved_path[h] = out_path
-                    existing_stems.add(stem_key)
-                    if text_fp:
-                        seen_text_fps.add(text_fp)
-                        text_fp_to_path[text_fp] = out_path
+                    duplicate_policy.remember_hash(h, out_path, seen_hashes, hash_to_saved_path)
+                    duplicate_policy.remember_stem(stem_key, existing_stems)
+                    duplicate_policy.remember_text_fingerprint(
+                        text_fp, out_path, seen_text_fps, text_fp_to_path
+                    )
                     download_report.append(
                         {
                             "msg_id": msg_id,
@@ -1394,8 +1105,8 @@ def main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI orc
                         name, blob = out["path"]
                         h = sha256_bytes(blob)
                         candidate["sha256"] = h
-                        if h in seen_hashes:
-                            dup_path = hash_to_saved_path.get(h)
+                        if duplicate_policy.duplicate_by_hash(h, seen_hashes):
+                            dup_path = duplicate_policy.duplicate_of_hash(h, hash_to_saved_path)
                             download_report.append(
                                 {
                                     "msg_id": msg_id,
@@ -1427,8 +1138,8 @@ def main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI orc
                         confidence = pdf_confidence(stats)
                         text_fp = pdf_text_fingerprint(tmp_path) if HAVE_PYMUPDF else None
                         candidate["text_fingerprint"] = text_fp
-                        if text_fp and text_fp in seen_text_fps:
-                            dup_path = text_fp_to_path.get(text_fp)
+                        if duplicate_policy.duplicate_by_text_fingerprint(text_fp, seen_text_fps):
+                            dup_path = duplicate_policy.duplicate_of_text(text_fp, text_fp_to_path)
                             download_report.append(
                                 {
                                     "msg_id": msg_id,
@@ -1497,7 +1208,7 @@ def main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI orc
                             continue
 
                         tagged_name, stem_key = build_tagged_name(name, msg_tag)
-                        if stem_key in existing_stems:
+                        if duplicate_policy.duplicate_by_stem(stem_key, existing_stems):
                             os.remove(tmp_path)
                             download_report.append(
                                 {
@@ -1514,12 +1225,11 @@ def main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI orc
 
                         out_path = ensure_unique_path(inv_dir, tagged_name)
                         os.replace(tmp_path, out_path)
-                        seen_hashes.add(h)
-                        hash_to_saved_path[h] = out_path
-                        existing_stems.add(stem_key)
-                        if text_fp:
-                            seen_text_fps.add(text_fp)
-                            text_fp_to_path[text_fp] = out_path
+                        duplicate_policy.remember_hash(h, out_path, seen_hashes, hash_to_saved_path)
+                        duplicate_policy.remember_stem(stem_key, existing_stems)
+                        duplicate_policy.remember_text_fingerprint(
+                            text_fp, out_path, seen_text_fps, text_fp_to_path
+                        )
                         download_report.append(
                             {
                                 "msg_id": msg_id,
@@ -1600,37 +1310,27 @@ def main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI orc
 
     # ----- Reports -----
     if args.download_report:
-        with open(args.download_report, "w", encoding="utf-8") as f:
-            json.dump(
-                {"saved": saved_rows, "rejected": rejected_rows, "ts": now_utc_iso()},
-                f,
-                ensure_ascii=False,
-                indent=2,
-            )
+        report_io.write_json(
+            args.download_report,
+            {"saved": saved_rows, "rejected": rejected_rows, "ts": now_utc_iso()},
+        )
         print(f"Download report → {args.download_report}")
 
     if args.save_json:
-        with open(args.save_json, "w", encoding="utf-8") as f:
-            json.dump(saved_rows, f, ensure_ascii=False, indent=2)
+        report_io.write_json(args.save_json, saved_rows)
         print(f"Saved messages JSON → {args.save_json}")
 
     if args.save_csv:
         fields = ["id", "subject", "from", "receivedDateTime", "source", "path"]
-        with open(args.save_csv, "w", encoding="utf-8", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=fields)
-            w.writeheader()
-            for r in saved_rows:
-                w.writerow({k: r.get(k) for k in fields})
+        report_io.write_dict_rows_csv(args.save_csv, saved_rows, fields)
         print(f"Saved messages CSV → {args.save_csv}")
 
     if args.save_candidates:
-        with open(args.save_candidates, "w", encoding="utf-8") as f:
-            json.dump(candidate_entries, f, ensure_ascii=False, indent=2)
+        report_io.write_json(args.save_candidates, candidate_entries)
         print(f"Saved candidates → {args.save_candidates}")
 
     if args.save_nonmatches:
-        with open(args.save_nonmatches, "w", encoding="utf-8") as f:
-            json.dump(rejected_rows, f, ensure_ascii=False, indent=2)
+        report_io.write_json(args.save_nonmatches, rejected_rows)
         print(f"Saved nonmatches → {args.save_nonmatches}")
 
     print(f"Done. Saved {len(saved_rows)} invoices; Rejected {len(rejected_rows)}.")

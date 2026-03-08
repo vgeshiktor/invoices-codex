@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Sequence, Tuple
 
 from invplatform.domain import pdf as domain_pdf
+from invplatform.usecases import duplicate_policy, provider_runner
 
 
 PROJECT_SRC = Path(__file__).resolve().parents[2]
@@ -52,6 +53,7 @@ class ProviderRun:
     name: str
     invoices_dir: Path
     command: List[str]
+    invocation: provider_runner.ProviderInvocation | None = None
 
 
 @dataclass
@@ -191,8 +193,8 @@ def consolidate_pdfs(dest_dir: Path, sources: Sequence[Path]) -> Dict[str, int]:
         return stats
     dest_dir.mkdir(parents=True, exist_ok=True)
     seen_hashes = preload_hashes(dest_dir)
-    stats["existing"] = len(seen_hashes)
-    seen = dict(seen_hashes)
+    seen = set(seen_hashes.keys())
+    stats["existing"] = len(seen)
     for src in sources:
         if not src.exists():
             continue
@@ -202,12 +204,12 @@ def consolidate_pdfs(dest_dir: Path, sources: Sequence[Path]) -> Dict[str, int]:
                 digest = hash_file(pdf)
             except Exception:
                 continue
-            if digest in seen:
+            if duplicate_policy.duplicate_by_hash(digest, seen):
                 stats["duplicates"] += 1
                 continue
             dest_path = ensure_unique(dest_dir, pdf.name)
             shutil.copy2(pdf, dest_path)
-            seen[digest] = dest_path
+            seen.add(digest)
             stats["copied"] += 1
     return stats
 
@@ -225,9 +227,9 @@ def dedupe_provider_dir(target_dir: Path) -> Dict[str, int]:
     if not target_dir.exists():
         return stats
     duplicates_dir = target_dir / "duplicates"
-    seen_hash: Dict[str, Path] = {}
-    seen_stem: Dict[str, Path] = {}
-    seen_text: Dict[str, Path] = {} if HAVE_PYMUPDF else {}
+    seen_hash: set[str] = set()
+    seen_stem: set[str] = set()
+    seen_text: set[str] = set() if HAVE_PYMUPDF else set()
     for pdf in iter_invoice_pdfs(target_dir):
         stats["scanned"] += 1
         try:
@@ -237,16 +239,14 @@ def dedupe_provider_dir(target_dir: Path) -> Dict[str, int]:
         except Exception:
             stats["errors"] += 1
             continue
-        is_dup = False
-        if digest in seen_hash or stem in seen_stem:
-            is_dup = True
-        if tfp and tfp in seen_text:
-            is_dup = True
-        if not is_dup:
-            seen_hash[digest] = pdf
-            seen_stem[stem] = pdf
+        is_hash_dup = duplicate_policy.duplicate_by_hash(digest, seen_hash)
+        is_stem_dup = duplicate_policy.duplicate_by_stem(stem, seen_stem)
+        is_text_dup = duplicate_policy.duplicate_by_text_fingerprint(tfp, seen_text)
+        if not (is_hash_dup or is_stem_dup or is_text_dup):
+            seen_hash.add(digest)
+            duplicate_policy.remember_stem(stem, seen_stem)
             if tfp:
-                seen_text[tfp] = pdf
+                seen_text.add(tfp)
             stats["kept"] += 1
             continue
         # Duplicate: move into duplicates/ (skip if something already there)
@@ -275,10 +275,7 @@ def build_runs(
     runs: List[ProviderRun] = []
     if "gmail" in providers:
         gmail_dir = base_dir / f"invoices_gmail_{month_label}"
-        cmd = [
-            python_bin,
-            "-m",
-            "invplatform.cli.gmail_invoice_finder",
+        argv = [
             "--start-date",
             start_date,
             "--end-date",
@@ -293,8 +290,20 @@ def build_runs(
             str(gmail_dir / "invoices_gmail.csv"),
         ]
         if gmail_extra_args:
-            cmd.extend(shlex.split(gmail_extra_args))
-        runs.append(ProviderRun(name="gmail", invoices_dir=gmail_dir, command=cmd))
+            argv.extend(shlex.split(gmail_extra_args))
+        invocation = provider_runner.ProviderInvocation(
+            python_bin=python_bin,
+            module="invplatform.cli.gmail_invoice_finder",
+            argv=argv,
+        )
+        runs.append(
+            ProviderRun(
+                name="gmail",
+                invoices_dir=gmail_dir,
+                command=invocation.to_command(),
+                invocation=invocation,
+            )
+        )
     if "outlook" in providers:
         if not graph_client_id:
             raise SystemExit(
@@ -302,10 +311,7 @@ def build_runs(
                 "(pass via --graph-client-id or env var)."
             )
         graph_dir = base_dir / f"invoices_outlook_{month_label}"
-        cmd = [
-            python_bin,
-            "-m",
-            "invplatform.cli.graph_invoice_finder",
+        argv = [
             "--client-id",
             graph_client_id,
             "--authority",
@@ -324,44 +330,33 @@ def build_runs(
             str(graph_dir / "invoices_outlook.csv"),
         ]
         if graph_extra_args:
-            cmd.extend(shlex.split(graph_extra_args))
-        runs.append(ProviderRun(name="outlook", invoices_dir=graph_dir, command=cmd))
+            argv.extend(shlex.split(graph_extra_args))
+        invocation = provider_runner.ProviderInvocation(
+            python_bin=python_bin,
+            module="invplatform.cli.graph_invoice_finder",
+            argv=argv,
+        )
+        runs.append(
+            ProviderRun(
+                name="outlook",
+                invoices_dir=graph_dir,
+                command=invocation.to_command(),
+                invocation=invocation,
+            )
+        )
     return runs
 
 
 def run_provider(run: ProviderRun) -> ProviderResult:
-    def _resolve_runner(name: str):
-        if name == "gmail":
-            from invplatform.cli import gmail_invoice_finder as gmail_finder
-
-            return gmail_finder.run
-        if name == "outlook":
-            from invplatform.cli import graph_invoice_finder as graph_finder
-
-            return graph_finder.run
-        raise ValueError(f"Unknown provider: {name}")
-
-    def _provider_argv(command: Sequence[str]) -> List[str]:
-        # Legacy command layout: [python, -m, module, ...args]
-        if len(command) >= 3 and command[1] == "-m":
-            return list(command[3:])
-        return list(command)
-
     run.invoices_dir.mkdir(parents=True, exist_ok=True)
     stage_start = time.monotonic()
     start_utc = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     print(f"[MONTHLY_STAGE] {run.name} START utc={start_utc}")
     print(f"[{run.name}] running: {' '.join(run.command)}")
-    runner = _resolve_runner(run.name)
-    argv = _provider_argv(run.command)
-    try:
-        returncode = int(runner(argv))
-    except SystemExit as exc:
-        code = exc.code
-        returncode = int(code) if isinstance(code, int) else 1
-    except Exception as exc:
-        print(f"[{run.name}] failed with exception: {exc}")
-        returncode = 1
+    execution = provider_runner.execute_provider(run.name, run.invocation or run.command)
+    if execution.error:
+        print(f"[{run.name}] failed with exception: {execution.error}")
+    returncode = execution.returncode
     duration = time.monotonic() - stage_start
     end_utc = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     print(f"[{run.name}] finished with code {returncode}")

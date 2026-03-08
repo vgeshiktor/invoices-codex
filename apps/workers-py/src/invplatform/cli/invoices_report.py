@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import calendar
-from collections import Counter
 import csv
 import hashlib
 import html
@@ -13,7 +12,17 @@ import re
 from dataclasses import dataclass, asdict, replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple, cast
+
+from invplatform.usecases import (
+    report_municipal,
+    report_partner,
+    report_pipeline,
+    report_parser,
+    report_splitter,
+    report_totals,
+    report_vendor_strategies,
+)
 
 try:
     from pdfminer.high_level import extract_text
@@ -24,7 +33,7 @@ except ModuleNotFoundError as exc:  # pragma: no cover - import guard
     ) from exc
 
 try:
-    import fitz
+    import fitz  # type: ignore[import-untyped]
 
     HAVE_PYMUPDF = True
 except ModuleNotFoundError:
@@ -33,61 +42,12 @@ except ModuleNotFoundError:
 
 Amount = Optional[float]
 
-KNOWN_VENDOR_MARKERS: Tuple[Tuple[str, str], ...] = (
-    ("יול ימר", "רמי לוי תקשורת"),
-    ("פרטנר", 'חברת פרטנר תקשורת בע"מ'),
-    ("רנטרפ", 'חברת פרטנר תקשורת בע"מ'),
-    ("partner communications", 'חברת פרטנר תקשורת בע"מ'),
-    ("בזק-ג'ן בע\"מ", "בזק-ג'ן בע\"מ"),
-    ('בזק-ג׳ן בע"מ', 'בזק-ג׳ן בע"מ'),
-    ("מ\"עב ן'ג-קזב", 'בזק-ג׳ן בע"מ'),
-    ('דן חברה לתחבורה ציבורית בע"מ', 'דן חברה לתחבורה ציבורית בע"מ'),
-    ('מ"עב תירוביצ הרובחתל הרבח ןד', 'דן חברה לתחבורה ציבורית בע"מ'),
-    ("משרד התחבורה והבטיחות בדרכים", "משרד התחבורה והבטיחות בדרכים"),
-    ("םיכרדב תוחיטבהו הרובחתה דרשמ", "משרד התחבורה והבטיחות בדרכים"),
-    ("אופק הפקות", "אופק הפקות"),
-    ("הפקות אופק", "אופק הפקות"),
-    ("אופק", "אופק הפקות"),
-    ("ofek productions", "אופק הפקות"),
-    ("סטינג", "STINGTV"),
-    ("stingtv", "STINGTV"),
-    ("סי יתורש", "STINGTV"),
-    ("יתורש סי", "STINGTV"),
-    ("just simple ltd", "JUST SIMPLE LTD"),
-)
-
-PETAH_TIKVA_KEYWORDS: Tuple[str, ...] = ("פתח תק", "הווקת חתפ")
-PETAH_TIKVA_MUNICIPAL_MARKERS: Tuple[str, ...] = (
-    "עיריית",
-    "עריית",
-    "עירייה",
-    "עיריה",
-    "ערייה",
-    "עריה",
-    "עירית",
-    "ערית",
-    "העירייה",
-    "העיריה",
-    "תיעיר",
-    "תיעירת",
-    "רשות מקומית",
-)
-
-PUBLIC_TRANSPORT_HEBREW_MARKERS: Tuple[str, ...] = (
-    "תירוביצ הרובחת",
-    "תירוביצה הרובחת",
-    "תירוביצה הרובחתה",
-    "התחבורה הציבורית",
-    "וק-בר",
-    "רב-קו",
-)
-PUBLIC_TRANSPORT_LATIN_MARKERS: Tuple[str, ...] = (
-    "ravpass",
-    "rav-kav",
-    "ravkav",
-    "rav kav",
-)
-PUBLIC_TRANSPORT_INVOICE_FOR = "רב-קו - טעינה"
+KNOWN_VENDOR_MARKERS = report_vendor_strategies.KNOWN_VENDOR_MARKERS
+PETAH_TIKVA_KEYWORDS = report_vendor_strategies.PETAH_TIKVA_KEYWORDS
+PETAH_TIKVA_MUNICIPAL_MARKERS = report_vendor_strategies.PETAH_TIKVA_MUNICIPAL_MARKERS
+PUBLIC_TRANSPORT_HEBREW_MARKERS = report_vendor_strategies.PUBLIC_TRANSPORT_HEBREW_MARKERS
+PUBLIC_TRANSPORT_LATIN_MARKERS = report_vendor_strategies.PUBLIC_TRANSPORT_LATIN_MARKERS
+PUBLIC_TRANSPORT_INVOICE_FOR = report_vendor_strategies.PUBLIC_TRANSPORT_INVOICE_FOR
 
 PDF_REPORT_COLUMNS: Tuple[Tuple[str, str, float, int], ...] = (
     ("invoice_id", "Invoice No.", 0.10, 1),
@@ -326,14 +286,18 @@ def extract_period_info(text: str) -> Tuple[Optional[str], Optional[str], Option
                 parsed_dates.sort()
                 start_base = parsed_dates[0]
                 end_autopay = parsed_dates[-1]
-                start = start_base.replace(day=1)
-                end = end_autopay - timedelta(days=1)
-                if end < start:
-                    end = end_autopay
-                start_label = MONTH_LABELS_HE.get(start.month, start.strftime("%B"))
-                end_label = MONTH_LABELS_HE.get(end.month, end.strftime("%B"))
+                start_date = start_base.replace(day=1)
+                end_date = end_autopay - timedelta(days=1)
+                if end_date < start_date:
+                    end_date = end_autopay
+                start_label = MONTH_LABELS_HE.get(start_date.month, start_date.strftime("%B"))
+                end_label = MONTH_LABELS_HE.get(end_date.month, end_date.strftime("%B"))
                 label = f"{start_label} - {end_label}"
-                return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"), label
+                return (
+                    start_date.strftime("%Y-%m-%d"),
+                    end_date.strftime("%Y-%m-%d"),
+                    label,
+                )
     range_pattern = re.search(
         r"(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})\s*[-–]\s*(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})",
         text,
@@ -341,18 +305,18 @@ def extract_period_info(text: str) -> Tuple[Optional[str], Optional[str], Option
     if range_pattern:
         start = normalize_date_token(range_pattern.group(1))
         end = normalize_date_token(range_pattern.group(2))
-        label = f"{start} - {end}" if start and end else None
-        return start, end, label
+        range_label = f"{start} - {end}" if start and end else None
+        return start, end, range_label
     bilingual_pattern = re.search(r"(\d{4})\s+([א-ת]+)\s*[-–]\s*([א-ת]+)", text)
     if bilingual_pattern:
         year = int(bilingual_pattern.group(1))
         month_a = MONTH_NAME_MAP.get(bilingual_pattern.group(2).lower())
         month_b = MONTH_NAME_MAP.get(bilingual_pattern.group(3).lower())
         if month_a and month_b:
-            start = date(year, month_a, 1)
-            end = date(year, month_b, calendar.monthrange(year, month_b)[1])
+            start_date = date(year, month_a, 1)
+            end_date = date(year, month_b, calendar.monthrange(year, month_b)[1])
             label = f"{bilingual_pattern.group(3)} - {bilingual_pattern.group(2)}"
-            return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"), label
+            return start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"), label
     month_year_pattern = re.search(
         r"(?:תקופה|billing|statement|month|חודש)\D*([A-Za-zא-ת]+)\s+(\d{4})",
         text,
@@ -371,16 +335,6 @@ def extract_period_info(text: str) -> Tuple[Optional[str], Optional[str], Option
                 f"{start_date:%Y-%m} ({month_year_pattern.group(1)} {year})",
             )
     return None, None, None
-    bilingual_pattern = re.search(r"(\d{4})\s+([א-ת]+)\s*[-–]\s*([א-ת]+)", text)
-    if bilingual_pattern:
-        year = int(bilingual_pattern.group(1))
-        month_a = MONTH_NAME_MAP.get(bilingual_pattern.group(2).lower())
-        month_b = MONTH_NAME_MAP.get(bilingual_pattern.group(3).lower())
-        if month_a and month_b:
-            start = date(year, month_a, 1)
-            end = date(year, month_b, calendar.monthrange(year, month_b)[1])
-            label = f"{bilingual_pattern.group(2)} - {bilingual_pattern.group(3)}"
-            return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"), label
 
 
 def extract_due_date(text: str) -> Optional[str]:
@@ -553,34 +507,7 @@ def configure_pdfminer_logging(debug: bool) -> None:
 def amount_near_markers(
     text: str, patterns: Iterable[str], window: int = 120, prefer: str = "max"
 ) -> Amount:
-    def extract_values(tokens: List[str]) -> List[Tuple[float, str]]:
-        values: List[Tuple[float, str]] = []
-        for tok in tokens:
-            amount = parse_number(tok)
-            if amount is not None and amount > 0:
-                values.append((amount, tok))
-        return values
-
-    def choose(values: List[Tuple[float, str]]) -> Amount:
-        if not values:
-            return None
-        decimals = [val for val in values if "." in val[1] or "," in val[1]]
-        pool = decimals if decimals else values
-        amounts = [val for val, _ in pool]
-        if prefer == "min":
-            return min(amounts)
-        return max(amounts)
-
-    for pattern in patterns:
-        for match in re.finditer(pattern, text, flags=re.MULTILINE):
-            tail = text[match.end() : match.end() + window]
-            head = text[max(0, match.start() - window) : match.start()]
-            values = extract_values(re.findall(r"[\d.,]+", tail))
-            values += extract_values(re.findall(r"[\d.,]+", head))
-            amount = choose(values)
-            if amount is not None:
-                return amount
-    return None
+    return report_totals.amount_near_markers(text, patterns, window, prefer)
 
 
 def needs_fallback_text(text: str) -> bool:
@@ -613,231 +540,67 @@ def extract_text_with_pymupdf(path: Path) -> str:
     return "\n".join(parts)
 
 
-DIRECT_DEBIT_LABELS = (
-    'סה"כ יגבה מהחשבון',
-    'סה"כ יגבה',
-)
-MUNICIPAL_BREAKDOWN_MARKERS = (
-    "חיוב תקופתי",
-    "חיוב שנתי",
-    "הנחת גביה",
-    "הנחת תשלום",
-)
-
-PARTNER_PERIODIC_MARKERS = (
-    "חשבון תקופתי",
-    "מקור-תקופתי",
-    "חשבון מקור-תקופתי",
-)
+DIRECT_DEBIT_LABELS = report_municipal.DIRECT_DEBIT_LABELS
+MUNICIPAL_BREAKDOWN_MARKERS = report_municipal.MUNICIPAL_BREAKDOWN_MARKERS
+PARTNER_PERIODIC_MARKERS = report_partner.PARTNER_PERIODIC_MARKERS
 
 
 def find_municipal_invoice_id(lines: List[str]) -> Tuple[Optional[str], Optional[str]]:
-    def prev_text(idx: int) -> Optional[str]:
-        for pos in range(idx - 1, -1, -1):
-            candidate = lines[pos].strip()
-            if candidate:
-                return candidate
-        return None
-
-    for idx, line in enumerate(lines):
-        token = re.sub(r"\s+", "", line)
-        if not token.isdigit() or not (8 <= len(token) <= 12):
-            continue
-        prev = prev_text(idx)
-        if prev and re.search(r"[א-תA-Za-z]", prev):
-            return token, prev
-    return None, None
+    return report_municipal.find_municipal_invoice_id(lines)
 
 
 def extract_amount_from_label(page: "fitz.Page", label_tokens: Sequence[str]) -> Amount:
-    words = page.get_text("words")
-    target = None
-    for word in words:
-        if any(token in word[4] for token in label_tokens):
-            target = (word[5], word[6])
-            break
-    if not target:
-        return None
-    line_words = [word for word in words if word[5] == target[0] and word[6] == target[1]]
-    if not line_words:
-        return None
-    y_coord = sum(word[1] for word in line_words) / len(line_words)
-    digits = [
-        word
-        for word in words
-        if abs(word[1] - y_coord) < 0.6 and re.fullmatch(r"[0-9.,]+", word[4])
-    ]
-    if not digits:
-        return None
-    digits = sorted(digits, key=lambda word: word[0])
-    raw = "".join(word[4] for word in digits)
-    return parse_number(raw)
+    return report_municipal.extract_amount_from_label(page, label_tokens)
 
 
 def extract_municipal_breakdown(lines: List[str]) -> Optional[List[float]]:
-    values: List[float] = []
-    for line in lines:
-        if not any(marker in line for marker in MUNICIPAL_BREAKDOWN_MARKERS):
-            continue
-        amount = select_amount(re.findall(r"[\d.,]+", line))
-        if amount is None:
-            continue
-        is_discount = "הנחת" in line or "זיכוי" in line or line.lstrip().startswith("-")
-        if is_discount:
-            amount = -abs(amount)
-        values.append(amount)
-    return values or None
+    return report_municipal.extract_municipal_breakdown(lines)
 
 
 def normalize_partner_text(text: str) -> str:
-    return " ".join(text.split())
+    return report_partner.normalize_partner_text(text)
 
 
 def parse_partner_amount_fragment(fragment: str) -> Optional[float]:
-    cleaned = fragment.replace("{", " ").replace("}", " ")
-    cleaned = " ".join(cleaned.split())
-    match = re.search(r"(\d{1,2})\s*\.\s*([\d,]{3,})", cleaned)
-    if match:
-        token = f"{match.group(2)}.{match.group(1)}"
-        amount = parse_number(token)
-        if amount is not None:
-            return amount
-    tokens = re.findall(r"[\d,]+\.\d{2}", cleaned)
-    if tokens:
-        return parse_number(tokens[0])
-    tokens = re.findall(r"[\d,]+", cleaned)
-    if tokens:
-        return parse_number(tokens[0])
-    return None
+    return report_partner.parse_partner_amount_fragment(fragment)
 
 
 def extract_partner_amount(normalized: str, marker_pattern: str) -> Optional[float]:
-    match = re.search(marker_pattern + r"(.{0,80})", normalized, flags=re.DOTALL)
-    if not match:
-        return None
-    return parse_partner_amount_fragment(match.group(1))
+    return report_partner.extract_partner_amount(normalized, marker_pattern)
 
 
-def extract_partner_totals_from_text(text: str) -> Dict[str, Optional[float]]:
-    normalized = normalize_partner_text(text)
-    total = extract_partner_amount(
-        normalized,
-        r"סה[\"״']?כ\s+חיובים\s+וזיכויים\s+לתקופת\s+החשבון\s+כולל\s+מע\"?מ",
+def extract_partner_totals_from_text(text: str) -> report_partner.PartnerTotalsResult:
+    return report_partner.extract_partner_totals_from_text(text)
+
+
+def extract_partner_totals_from_pdf(path: Path) -> report_partner.PartnerTotalsResult:
+    return report_partner.extract_partner_totals_from_pdf(
+        path,
+        have_pymupdf=HAVE_PYMUPDF,
+        open_pdf=lambda target: fitz.open(target),
     )
-    if total is None:
-        total = extract_partner_amount(normalized, r"סה[\"״']?כ\s+לתשלום")
-    base = extract_partner_amount(
-        normalized,
-        r"סה[\"״']?כ\s+חיובי\s+החשבון\s+לא\s+כולל\s+מע\"?מ",
-    )
-    vat = extract_partner_amount(normalized, r"מע\"?מ%?\s*18")
-    return {
-        "invoice_total": total,
-        "base_before_vat": base,
-        "invoice_vat": vat,
-    }
-
-
-def extract_partner_totals_from_pdf(path: Path) -> Dict[str, Optional[float]]:
-    if not HAVE_PYMUPDF:
-        return {}
-    try:
-        doc = fitz.open(path)
-    except Exception:
-        return {}
-    try:
-        for page in doc:
-            text = page.get_text("text")
-            if not text:
-                continue
-            normalized = normalize_partner_text(text)
-            if not all(marker in normalized for marker in ("חשבון", "תקופתי")):
-                continue
-            if not any(marker in normalized for marker in PARTNER_PERIODIC_MARKERS):
-                continue
-            totals = extract_partner_totals_from_text(text)
-            if totals.get("invoice_total"):
-                return totals
-    finally:
-        doc.close()
-    return {}
 
 
 def split_municipal_multi_invoice(
     path: Path, base_record: InvoiceRecord, debug: bool = False
 ) -> List[InvoiceRecord]:
-    if not HAVE_PYMUPDF or not base_record.municipal:
-        return [base_record]
-    if base_record.notes == "extract_text_failed":
-        return [base_record]
-    try:
-        doc = fitz.open(path)
-    except Exception:
-        return [base_record]
-    entries: List[Dict[str, object]] = []
-    try:
-        for page in doc:
-            text = page.get_text("text")
-            if not text:
-                continue
-            if not any(label in text for label in DIRECT_DEBIT_LABELS):
-                continue
-            lines = extract_lines(text)
-            invoice_id, invoice_for = find_municipal_invoice_id(lines)
-            if not invoice_id:
-                continue
-            total = extract_amount_from_label(page, ["יגבה"])
-            if total is None:
-                total = extract_amount_from_label(page, ["לתשלום"])
-            breakdown_values = extract_municipal_breakdown(lines)
-            breakdown_sum = round(sum(breakdown_values), 2) if breakdown_values else None
-            if total is None and breakdown_sum is None:
-                continue
-            entries.append(
-                {
-                    "invoice_id": invoice_id,
-                    "invoice_for": invoice_for,
-                    "invoice_date": infer_invoice_date(text),
-                    "invoice_total": total or breakdown_sum,
-                    "breakdown_values": breakdown_values,
-                    "breakdown_sum": breakdown_sum,
-                }
-            )
-    finally:
-        doc.close()
-    if len(entries) < 2:
-        return [base_record]
-    seen: set[str] = set()
-    records: List[InvoiceRecord] = []
-    for entry in entries:
-        invoice_id = entry["invoice_id"]
-        if not isinstance(invoice_id, str) or invoice_id in seen:
-            continue
-        seen.add(invoice_id)
-        record = replace(base_record)
-        record.invoice_id = invoice_id
-        record.invoice_for = entry.get("invoice_for") or base_record.invoice_for
-        record.invoice_date = entry.get("invoice_date") or base_record.invoice_date
-        record.invoice_total = entry.get("invoice_total")
-        record.breakdown_values = entry.get("breakdown_values")
-        record.breakdown_sum = entry.get("breakdown_sum")
-        record.invoice_vat = 0.0
-        record.data_source = "pymupdf"
-        record.parse_confidence = compute_parse_confidence(record)
-        if (
-            record.breakdown_sum is not None
-            and record.invoice_total is not None
-            and abs(record.breakdown_sum - record.invoice_total) > 1.0
-        ):
-            record.notes = (record.notes + "; " if record.notes else "") + (
-                "Total differs from breakdown sum"
-            )
-        records.append(record)
-    if len(records) < 2:
-        return [base_record]
-    if debug:
-        print(f"[debug][{path.name}] municipal split into {len(records)} records")
-    return records
+    deps = report_splitter.SplitDeps(
+        have_pymupdf=HAVE_PYMUPDF,
+        open_pdf=lambda target: fitz.open(target),
+        extract_lines=extract_lines,
+        infer_invoice_date=infer_invoice_date,
+        clone_record=lambda rec: replace(cast(InvoiceRecord, rec)),
+        compute_parse_confidence=lambda rec: compute_parse_confidence(cast(InvoiceRecord, rec)),
+    )
+    return cast(
+        List[InvoiceRecord],
+        report_splitter.split_municipal_multi_invoice(
+            path,
+            base_record,
+            debug=debug,
+            deps=deps,
+        ),
+    )
 
 
 def extract_lines(text: str) -> List[str]:
@@ -893,28 +656,7 @@ def search_patterns(patterns: Iterable[str], text: str) -> Optional[str]:
 
 
 def normalize_invoice_for_value(raw: Optional[str]) -> Optional[str]:
-    if not raw:
-        return None
-    cleaned = raw.strip().strip(":\"'").strip()
-    cleaned = re.sub(r"^[\d\s'\"`.,-]+", "", cleaned)
-    cleaned = cleaned.strip()
-    if not cleaned or not re.search(r"[A-Za-zא-ת]", cleaned):
-        return None
-    match = re.search(r"מס-?\s*(\d{4})\s+([א-תA-Za-z\s\"']{2,})", cleaned)
-    if match:
-        desc = match.group(2).strip()
-        year = match.group(1)
-        if desc:
-            cleaned = f"{desc} {year}"
-    if "ארנונה לעסקים" in cleaned:
-        return "ארנונה לעסקים"
-    if "ארנונה" in cleaned:
-        return "ארנונה"
-    cleaned = re.sub(r"\s*-\s*", " - ", cleaned)
-    cleaned = re.sub(r'מ["״]\s*בע', 'בע"מ', cleaned)
-    cleaned = re.sub(r'בע["״]\s*מ', 'בע"מ', cleaned)
-    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
-    return cleaned or None
+    return report_vendor_strategies.normalize_invoice_for_value(raw)
 
 
 def infer_invoice_id(lines: List[str], text: str) -> Optional[str]:
@@ -1011,183 +753,51 @@ def infer_invoice_date(text: str) -> Optional[str]:
 
 
 def detect_known_vendor(text: Optional[str]) -> Optional[str]:
-    if not text:
-        return None
-    normalized_text = text.casefold()
-    for marker, label in KNOWN_VENDOR_MARKERS:
-        if marker.casefold() in normalized_text:
-            return label
-    return None
+    return report_vendor_strategies.detect_known_vendor(text)
 
 
 def has_public_transport_marker(text: Optional[str]) -> bool:
-    if not text:
-        return False
-    lowered = text.lower()
-    if any(marker in text for marker in PUBLIC_TRANSPORT_HEBREW_MARKERS):
-        return True
-    return any(marker in lowered for marker in PUBLIC_TRANSPORT_LATIN_MARKERS)
+    return report_vendor_strategies.has_public_transport_marker(text)
 
 
 def looks_like_petah_tikva_municipality(text: Optional[str]) -> bool:
-    if not text:
-        return False
-    if not any(marker in text for marker in PETAH_TIKVA_KEYWORDS):
-        return False
-    return any(marker in text for marker in PETAH_TIKVA_MUNICIPAL_MARKERS)
+    return report_vendor_strategies.looks_like_petah_tikva_municipality(text)
 
 
 def infer_invoice_from(lines: List[str], text: Optional[str] = None) -> Optional[str]:
-    candidate: Optional[str] = None
-    for line in lines:
-        if 'מ"עב' in line or 'בע"מ' in line or "Ltd" in line or "חברה" in line:
-            candidate = line
-            break
-    if candidate is None:
-        for line in lines[:15]:
-            if "www" in line or "@" in line or "cid:" in line:
-                continue
-            if line.isdigit():
-                continue
-            if re.search(r"[א-תA-Za-z]", line):
-                candidate = line
-                break
-    vendor = detect_known_vendor(text)
-    if vendor:
-        return vendor
-    if text:
-        normalized_text = re.sub(r"\s+", " ", text)
-        if all(term in normalized_text for term in ("קרן", "מדריכת", "הורים", "ותינוקות")):
-            return "קרן-מדריכת הורים ותינוקות"
-        match = re.search(r"מאת\s+([^\n]+)", text)
-        if match:
-            candidate = match.group(1).strip()
-            for stop in (":", "לכבוד", "שם"):
-                if stop in candidate:
-                    candidate = candidate.split(stop, 1)[0].strip()
-            if candidate:
-                return candidate
-        match = re.search(r"ע[יר]יית\s+[^\n]{2,40}", text)
-        if match:
-            result = match.group(0).strip().replace("עריית", "עיריית")
-            return result
-        if looks_like_petah_tikva_municipality(text):
-            return "עיריית פתח תקווה"
-    return candidate
+    return report_vendor_strategies.infer_invoice_from(lines, text)
 
 
 def numeric_candidates(line: str) -> List[tuple[str, bool]]:
-    candidates: List[tuple[str, bool]] = []
-    for match in re.finditer(r"[\d.,]+", line):
-        token = match.group(0)
-        start, end = match.start(), match.end()
-        before = line[max(0, start - 2) : start]
-        after = line[end : end + 2]
-        is_percent = "%" in before or "%" in after
-        candidates.append((token, is_percent))
-    return candidates
+    return report_totals.numeric_candidates(line)
 
 
 def numeric_values_near_marker(lines: List[str], marker: str, window: int = 4) -> List[float]:
-    values: List[float] = []
-    for idx, line in enumerate(lines):
-        if marker in line:
-            for token, is_percent in numeric_candidates(line):
-                if is_percent:
-                    continue
-                amount = parse_number(token)
-                if amount is not None:
-                    values.append(amount)
-            for offset in range(1, window + 1):
-                for pos in (idx - offset, idx + offset):
-                    if 0 <= pos < len(lines):
-                        for token, is_percent in numeric_candidates(lines[pos]):
-                            if is_percent:
-                                continue
-                            amount = parse_number(token)
-                            if amount is not None:
-                                values.append(amount)
-            break
-    return values
+    return report_totals.numeric_values_near_marker(lines, marker, window)
 
 
 def normalize_marker_text(line: str) -> str:
-    return line.replace("״", '"').replace("׳", "'").replace(" ", "")
+    return report_totals.normalize_marker_text(line)
 
 
 def is_total_with_vat_line(line: str) -> bool:
-    compact = normalize_marker_text(line)
-    has_total = 'כ"סה' in compact or 'סה"כ' in compact
-    has_vat = 'מ"מע' in compact or 'מע"מ' in compact
-    return has_total and has_vat and "כולל" in compact
+    return report_totals.is_total_with_vat_line(line)
 
 
 def is_vat_percent_line(line: str) -> bool:
-    compact = normalize_marker_text(line)
-    has_vat = 'מ"מע' in compact or 'מע"מ' in compact
-    return has_vat and "%" in compact
+    return report_totals.is_vat_percent_line(line)
 
 
 def amount_from_line_end(line: str) -> Amount:
-    tokens = [tok for tok, is_percent in numeric_candidates(line) if not is_percent]
-    if not tokens:
-        return None
-    for token in reversed(tokens):
-        if "." in token or "," in token:
-            amount = parse_number(token)
-            if amount is not None:
-                return amount
-    return parse_number(tokens[-1])
+    return report_totals.amount_from_line_end(line)
 
 
 def repeated_currency_total(currency_tokens: List[str]) -> Amount:
-    amounts = []
-    for token in currency_tokens:
-        amount = parse_number(token)
-        if amount is None or amount <= 0:
-            continue
-        amounts.append(round(amount, 2))
-    if not amounts:
-        return None
-    counts = Counter(amounts)
-    repeated = [(count, value) for value, count in counts.items() if count >= 2 and value >= 50]
-    if repeated:
-        repeated.sort(key=lambda item: (item[0], item[1]), reverse=True)
-        return repeated[0][1]
-    large = [value for value in amounts if value >= 50]
-    if large:
-        return max(large)
-    return max(amounts)
+    return report_totals.repeated_currency_total(currency_tokens)
 
 
 def extract_total_from_total_with_vat_lines(lines: List[str], currency_tokens: List[str]) -> Amount:
-    for line in lines:
-        if is_total_with_vat_line(line):
-            amount = amount_from_line_end(line)
-            if amount is not None:
-                return amount
-    for idx in range(len(lines)):
-        window = lines[idx : idx + 4]
-        if not window:
-            continue
-        has_total = any(
-            'כ"סה' in normalize_marker_text(line) or 'סה"כ' in normalize_marker_text(line)
-            for line in window
-        )
-        has_vat = any(
-            'מ"מע' in normalize_marker_text(line) or 'מע"מ' in normalize_marker_text(line)
-            for line in window
-        )
-        has_including = any("כולל" in line for line in window)
-        if has_total and has_vat and has_including:
-            window_amounts = [amount_from_line_end(line) for line in window]
-            numeric_amounts = [
-                value for value in window_amounts if value is not None and value >= 20
-            ]
-            if numeric_amounts:
-                return max(numeric_amounts)
-            return repeated_currency_total(currency_tokens)
-    return None
+    return report_totals.extract_total_from_total_with_vat_lines(lines, currency_tokens)
 
 
 def extract_vat_from_percent_lines(
@@ -1197,42 +807,12 @@ def extract_vat_from_percent_lines(
     total: Amount,
     explicit_vat_rate: Optional[float],
 ) -> Amount:
-    target_rate = explicit_vat_rate
-    for idx, line in enumerate(lines):
-        if not is_vat_percent_line(line):
-            continue
-        amount = amount_from_line_end(line)
-        if amount is not None:
-            return amount
-        if idx + 1 < len(lines):
-            next_amount = amount_from_line_end(lines[idx + 1])
-            if next_amount is not None:
-                return next_amount
-        if target_rate is None:
-            for token, is_percent in numeric_candidates(line):
-                if not is_percent:
-                    continue
-                parsed_rate = parse_number(token)
-                if parsed_rate is not None and 0 < parsed_rate <= 100:
-                    target_rate = parsed_rate
-                    break
-    if total is None or target_rate is None:
-        return None
-    candidates: List[Tuple[float, float]] = []
-    for token in currency_tokens:
-        amount = parse_number(token)
-        if amount is None or amount <= 0 or amount >= total:
-            continue
-        rate = vat_rate_estimate(total, amount)
-        if rate is None:
-            continue
-        candidates.append((abs(rate - target_rate), amount))
-    if not candidates:
-        return None
-    candidates.sort(key=lambda item: (item[0], item[1]))
-    if candidates[0][0] > 1.0:
-        return None
-    return candidates[0][1]
+    return report_totals.extract_vat_from_percent_lines(
+        lines,
+        currency_tokens,
+        total=total,
+        explicit_vat_rate=explicit_vat_rate,
+    )
 
 
 def sum_numeric_block(
@@ -1240,342 +820,51 @@ def sum_numeric_block(
     start_markers: Iterable[str],
     end_markers: Iterable[str],
 ) -> Tuple[Optional[float], List[float]]:
-    collecting = False
-    total = 0.0
-    found = False
-    values: List[float] = []
-    for line in lines:
-        if not collecting and any(marker in line for marker in start_markers):
-            collecting = True
-            continue
-        if collecting:
-            stripped = line.strip()
-            if any(end in line for end in end_markers):
-                break
-            token = stripped
-            if re.match(r"^-?\d[\d,]*(?:\.\d+)?$", token):
-                val = parse_number(token)
-                if val is not None:
-                    total += val
-                    values.append(val)
-                    found = True
-    return (total if found else None, values)
+    return report_totals.sum_numeric_block(lines, start_markers, end_markers)
 
 
 def extract_keren_invoice_for(text: Optional[str]) -> Optional[str]:
-    if not text:
-        return None
-    normalized = " ".join(text.split())
-    match = re.search(r"פירוט\s+(20\d{2})\s+([א-ת]+)\s+תנועה\s+חוג", normalized)
-    if match:
-        year, month = match.groups()
-        return f"חוג תנועה {month} {year}"
-    return None
+    return report_vendor_strategies.extract_keren_invoice_for(text)
 
 
 def extract_partner_invoice_for(lines: List[str], raw_text: Optional[str] = None) -> Optional[str]:
-    stop_markers = ['סה"כ', "סהכ", 'כ"הס']
-    for idx, line in enumerate(lines):
-        if "פירוט" in line and "חיובים" in line and "זיכויים" in line and "החשבון" in line:
-            details: List[str] = []
-            for lookahead in range(1, 8):
-                pos = idx + lookahead
-                if pos >= len(lines):
-                    break
-                candidate = lines[pos].strip()
-                if not candidate:
-                    continue
-                if any(marker in candidate for marker in stop_markers):
-                    break
-                if re.search(r"[א-תA-Za-z]", candidate):
-                    details.append(candidate)
-                if len(details) >= 4:
-                    break
-            if details:
-                return " | ".join(details)
-            return "פירוט חיובים וזיכויים לתקופת החשבון"
-
-    if raw_text:
-        segment_match = re.search(
-            r"פירוט\s+חיובים\s+וזיכויים\s+לתקופת\s+החשבון\s+(.*?)\s+סה\"?כ\s+חיובי\s+החשבון",
-            raw_text,
-            flags=re.DOTALL,
-        )
-        if segment_match:
-            segment = segment_match.group(1)
-            entries: List[str] = []
-            match_mobile = re.search(r"(\d+)מנויי\s*סלולר", segment)
-            if match_mobile:
-                entries.append(f"{match_mobile.group(1)} מנויי סלולר")
-            match_transport = re.search(r"(\d+)מנוי\s*תמסורת\s*([\d-]+)", segment)
-            if match_transport:
-                count, ident = match_transport.groups()
-                entries.append(f"{count} מנוי תמסורת {ident}")
-            if re.search(r"תנועות\s+כלליות\s+בחשבון\s+הלקוח", segment):
-                entries.append("תנועות כלליות בחשבון הלקוח")
-            if entries:
-                return " | ".join(entries)
-            return "פירוט חיובים וזיכויים לתקופת החשבון"
-    return None
+    return report_vendor_strategies.extract_partner_invoice_for(lines, raw_text)
 
 
 def extract_ofek_invoice_for(text: Optional[str]) -> Optional[str]:
-    if not text:
-        return None
-    normalized = " ".join(text.split())
-    month_pattern = r"(אוגוסט|ספטמבר|אוקטובר|נובמבר|דצמבר|ינואר|פברואר|מרץ|אפריל|מאי|יוני|יולי)"
-    variants = (
-        (r"חוג\s+תיאטרון\s+חודש\s+" + month_pattern, "חוג תיאטרון חודש {}"),
-        (month_pattern + r"\s+חודש\s+תיאטרון\s+חוג", "חוג תיאטרון חודש {}"),
-        (r"חוג\s+חודש\s+" + month_pattern, "חוג חודש {}"),
-        (month_pattern + r"\s+חודש\s+חוג", "חוג חודש {}"),
-    )
-    summaries: List[str] = []
-    for pattern, template in variants:
-        for month in re.findall(pattern, normalized):
-            value = template.format(month)
-            if value not in summaries:
-                summaries.append(value)
-    if summaries:
-        return " | ".join(summaries)
-    return None
+    return report_vendor_strategies.extract_ofek_invoice_for(text)
 
 
 def extract_stingtv_invoice_for(text: Optional[str]) -> Optional[str]:
-    if not text:
-        return None
-    normalized = " ".join(text.split())
-    phrase_variants = {
-        "שירותי תוכן בינלאומיים": [
-            "שירותי תוכן בינלאומיים",
-            "םיימואלניב ןכות יתוריש",
-        ],
-        "ספריות וערוצי פרימיום": [
-            "ספריות וערוצי פרימיום",
-            "םוימירפ יצורעו תוירפס",
-        ],
-    }
-    found: List[str] = []
-    for canonical, variants in phrase_variants.items():
-        if any(variant in normalized for variant in variants):
-            found.append(canonical)
-    if found:
-        return " | ".join(found)
-    return None
+    return report_vendor_strategies.extract_stingtv_invoice_for(text)
 
 
 def extract_stingtv_breakdown(text: Optional[str]) -> List[float]:
-    if not text:
-        return []
-    normalized = " ".join(text.split())
-    start = normalized.find("ןובשחה טוריפ")
-    if start == -1:
-        return []
-    end_markers = ["עצבמב לולכ", "תמלשומה", "Sample"]
-    end = len(normalized)
-    for marker in end_markers:
-        idx = normalized.find(marker, start)
-        if idx != -1:
-            end = min(end, idx)
-    section = normalized[start:end]
-    values: List[float] = []
-    for token in re.findall(r"-?\d[\d.,]*", section):
-        amount = parse_number(token)
-        if amount is not None:
-            values.append(amount)
-    return values
+    return report_vendor_strategies.extract_stingtv_breakdown(text)
 
 
 def extract_just_simple_invoice_for(
     lines: List[str], raw_text: Optional[str] = None
 ) -> Optional[str]:
-    source = raw_text or " ".join(lines)
-    if not source:
-        return None
-    normalized = " ".join(source.split())
-    if "just simple ltd" not in normalized.casefold():
-        return None
-
-    period_match = re.search(r"\b(?:0?[1-9]|1[0-2])/\d{2}\b", normalized)
-    period = period_match.group(0) if period_match else None
-    has_core_terms = all(term in normalized for term in ("תפעול", "פנסיוני", "שוטף"))
-    if has_core_terms and period:
-        return f"תפעול פנסיוני- שוטף {period}"
-
-    for idx, line in enumerate(lines):
-        if "תאור" not in line and "תיאור" not in line:
-            continue
-        collected: List[str] = []
-        for lookahead in range(1, 8):
-            pos = idx + lookahead
-            if pos >= len(lines):
-                break
-            candidate = lines[pos].strip()
-            if not candidate:
-                continue
-            if any(marker in candidate for marker in ("כמות", 'סה"כ', "סכום", "פירוט", "אופן")):
-                break
-            collected.append(candidate)
-        segment = " ".join(collected)
-        if all(term in segment for term in ("תפעול", "פנסיוני", "שוטף")):
-            if period is None:
-                segment_period = re.search(r"\b(?:0?[1-9]|1[0-2])/\d{2}\b", segment)
-                period = segment_period.group(0) if segment_period else None
-            if period:
-                return f"תפעול פנסיוני- שוטף {period}"
-    return None
+    return report_vendor_strategies.extract_just_simple_invoice_for(lines, raw_text)
 
 
 def infer_invoice_for(lines: List[str], text: Optional[str] = None) -> Optional[str]:
-    if has_public_transport_marker(text):
-        return PUBLIC_TRANSPORT_INVOICE_FOR
-    keren_summary = extract_keren_invoice_for(text)
-    if keren_summary:
-        return keren_summary
-    ofek_summary = extract_ofek_invoice_for(text)
-    if ofek_summary:
-        return ofek_summary
-    stingtv_summary = extract_stingtv_invoice_for(text)
-    if stingtv_summary:
-        return stingtv_summary
-    just_simple_summary = extract_just_simple_invoice_for(lines, text)
-    if just_simple_summary:
-        return just_simple_summary
-    partner_summary = extract_partner_invoice_for(lines, text)
-    if partner_summary:
-        return partner_summary
-    if ":םיטרפ" in " ".join(lines):
-        try:
-            start = lines.index(":םיטרפ")
-        except ValueError:
-            start = -1
-        if start >= 0:
-            collected: List[str] = []
-            for ln in lines[start + 1 :]:
-                if any(marker in ln for marker in ("טקמ", 'כ"הס', 'סה"כ', "כסה")):
-                    break
-                if len(ln) > 2:
-                    collected.append(ln)
-            if collected:
-                return " | ".join(collected[:5])
-    for idx, line in enumerate(lines):
-        if "פירוט החיוב" in line or "פירוט החיובים" in line:
-            tail = normalize_invoice_for_value(
-                line.split("פירוט החיוב", 1)[-1]
-                if "פירוט החיוב" in line
-                else line.split("פירוט החיובים", 1)[-1]
-            )
-            if tail and "נכס" not in tail:
-                return tail
-            for lookahead in range(1, 8):
-                if idx + lookahead < len(lines):
-                    raw_line = lines[idx + lookahead].strip()
-                    skip_markers = [
-                        'סה"כ',
-                        "סהכ",
-                        "תיאור",
-                        "כתובת",
-                        "מס' זיהוי",
-                        "מספר זיהוי",
-                        "מס'",
-                    ]
-                    if any(marker in raw_line for marker in skip_markers):
-                        continue
-                    candidate = normalize_invoice_for_value(raw_line)
-                    if candidate:
-                        return candidate
-    for line in lines:
-        if " עבור " in line or " - " in line:
-            if len(line) < 200:
-                if re.search(r"\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}", line):
-                    continue
-                normalized = normalize_invoice_for_value(line)
-                return normalized or line
-    if text:
-        if "ארנונה לעסקים" in text:
-            return "ארנונה לעסקים"
-        if "ארנונה" in text:
-            return "ארנונה"
-    return None
+    return report_vendor_strategies.infer_invoice_for(lines, text)
 
 
 def find_amount_before_marker(
     lines: List[str], marker: str, *, prefer_inline: bool = False
 ) -> Amount:
-    for idx, line in enumerate(lines):
-        if marker in line:
-            inline_candidates = numeric_candidates(line)
-            line_has_percent = "%" in line
-            preferred = [tok for tok, is_percent in inline_candidates if not is_percent]
-            tokens = preferred if preferred else [tok for tok, _ in inline_candidates]
-            if line_has_percent:
-                tokens = []
-            amount = select_amount(tokens[::-1]) if tokens else None
-            if amount is not None:
-                return amount
-            if prefer_inline:
-                continue
-            for lookback in range(1, 4):
-                if idx - lookback >= 0:
-                    candidate = lines[idx - lookback]
-                    if not prefer_inline and "/" in candidate and "₪" not in candidate:
-                        continue
-                    candidate_tokens = numeric_candidates(candidate)
-                    preferred_tokens = [
-                        tok for tok, is_percent in candidate_tokens if not is_percent
-                    ]
-                    tokens = (
-                        preferred_tokens
-                        if preferred_tokens
-                        else [tok for tok, _ in candidate_tokens]
-                    )
-                    amount = select_amount(tokens[::-1]) if tokens else None
-                    if amount is not None:
-                        return amount
-            for lookahead in range(1, 4):
-                if idx + lookahead < len(lines):
-                    candidate = lines[idx + lookahead]
-                    candidate_tokens = numeric_candidates(candidate)
-                    preferred_tokens = [
-                        tok for tok, is_percent in candidate_tokens if not is_percent
-                    ]
-                    tokens = (
-                        preferred_tokens
-                        if preferred_tokens
-                        else [tok for tok, _ in candidate_tokens]
-                    )
-                    amount = select_amount(tokens[::-1]) if tokens else None
-                    if amount is not None:
-                        return amount
-            break
-    return None
+    return report_totals.find_amount_before_marker(lines, marker, prefer_inline=prefer_inline)
 
 
 def vat_rate_estimate(total: Optional[float], vat: Optional[float]) -> Optional[float]:
-    if total is None or vat is None or total == 0:
-        return None
-    base = total - vat
-    if base <= 0:
-        return None
-    return round((vat / base) * 100, 2)
+    return report_totals.vat_rate_estimate(total, vat)
 
 
 def extract_vat_rate_from_text(text: Optional[str]) -> Optional[float]:
-    if not text:
-        return None
-    vat_marker = r"מ\s*[\"״']?\s*ע\s*[\"״']?\s*מ"
-    patterns = [
-        rf"([\d.,]+)\s*%[^\n]{{0,15}}?{vat_marker}",
-        rf"{vat_marker}[^%\d]{{0,15}}?([\d.,]+)\s*%",
-        r"VAT[^%\d]{0,15}?([\d.,]+)\s*%",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, text, flags=re.IGNORECASE)
-        if match:
-            value = parse_number(match.group(1))
-            if value is not None:
-                return round(value, 2)
-    return None
+    return report_totals.extract_vat_rate_from_text(text)
 
 
 def infer_totals(
@@ -1585,509 +874,56 @@ def infer_totals(
     debug: bool = False,
     label: str = "",
     pdfminer_lines: Optional[List[str]] = None,
-) -> Dict[str, object]:
-    def dbg(msg: str) -> None:
-        if debug:
-            prefix = f"[debug][{label}] " if label else "[debug] "
-            print(prefix + msg)
-
-    def numbers_after_marker(marker: str, limit: int = 10) -> Tuple[List[float], List[float]]:
-        best: List[float] = []
-        best_len = 0
-        best_max: Optional[float] = None
-        aggregated: List[float] = []
-        for idx, line in enumerate(lines):
-            if marker not in line:
-                continue
-            collected: List[float] = []
-            for offset in range(1, limit + 1):
-                pos = idx + offset
-                if pos >= len(lines):
-                    break
-                token = lines[pos]
-                if "." not in token and "," not in token and "₪" not in token:
-                    if collected:
-                        break
-                    continue
-                value = parse_number(token)
-                if value is None:
-                    if collected:
-                        break
-                    continue
-                collected.append(value)
-            if collected:
-                aggregated.extend(collected)
-                col_max = max(collected)
-                size = len(collected)
-                if (
-                    not best
-                    or (size >= 3 > best_len)
-                    or (size >= 3 and best_len >= 3 and (best_max is None or col_max > best_max))
-                    or (best_len < 3 and size < 3 and (best_max is None or col_max > best_max))
-                ):
-                    best = collected
-                    best_len = size
-                    best_max = col_max
-        return best, aggregated
-
-    total_block, total_values = numbers_after_marker('כ"הס', limit=16)
-    block_alt, values_alt = numbers_after_marker('סה"כ', limit=16)
-    if block_alt and (not total_block or max(block_alt) > max(total_block)):
-        total_block = block_alt
-    total_values.extend(values_alt)
-    block_max = max(total_block) if total_block else None
-
-    total = find_amount_before_marker(lines, 'םלוש כ"הס', prefer_inline=True)
-    if total is None:
-        total = find_amount_before_marker(lines, 'םולשתל כ"הס', prefer_inline=True)
-    if total is None:
-        total = find_amount_before_marker(lines, "םולשתל", prefer_inline=True)
-    base_before_vat = find_amount_before_marker(lines, 'מ"עמ ינפל', prefer_inline=True)
-    base_candidates = numeric_values_near_marker(lines, 'מ"עמ ינפל')
-    vat = find_amount_before_marker(lines, 'לע מ"עמ')
-    if vat is None:
-        vat = find_amount_before_marker(lines, 'מ"עמ ')
-    vat_candidates = numeric_values_near_marker(lines, 'לע מ"עמ')
-    explicit_vat_rate = extract_vat_rate_from_text(text)
-    currency_tokens = re.findall(r"₪\s*([\d.,]+)", text)
-    dbg(
-        f"initial total={total}, base_before_vat={base_before_vat}, "
-        f"base_candidates={base_candidates}, vat_initial={vat}, "
-        f"vat_candidates={vat_candidates}, explicit_vat_rate={explicit_vat_rate}"
-    )
-
-    if total is None:
-        for marker in ('סה"כ', "סה״כ", "סהכ", 'סה"כ לתשלום', 'סה"כ לתשלום בש"ח'):
-            total = find_amount_before_marker(lines, marker)
-            if total is not None:
-                break
-    if total is None:
-        match = re.search(r"סה.?\"?כ.?[:\-]?\s*([\d.,]+)", text)
-        if match:
-            total = parse_number(match.group(1))
-    if total is None:
-        patterns = [
-            r"סה.?\"?כ.? ?לתשלום[^\d]*([\d.,]+)",
-            r"([\d.,]+)\s+סה.?\"?כ.? ?לתשלום",
-            r"סה.?\"?כ.? ?לתשלום(?:.|\n){0,40}?([\d.,]+)",
-            r"כ.?\"?הס[^\n]{0,40}?םולשתל[^\n]{0,40}?ח.?\"?ש[^\n]{0,40}?מ\"?עמ[^\d]*([\d.,]+)",
-            r"([\d.,]+)\s+מ\"?עמ[^\n]{0,40}?ח.?\"?ש[^\n]{0,40}?םולשתל[^\n]{0,40}?כ.?\"?הס",
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, text, flags=re.MULTILINE | re.DOTALL)
-            if match:
-                total = parse_number(match.group(1))
-                if total is not None:
-                    break
-    if total is None:
-        total = amount_near_markers(
-            text,
-            [
-                r"סה.?\"?כ.? ?לתשלום",
-                r"כ.?\"?הס[^\n]{0,40}?םולשתל[^\n]{0,40}?מ\"?עמ",
-                r"ח.?\"?ש[^\n]{0,20}?םולשתל",
-            ],
-            prefer="max",
-        )
-    if total is None:
-        match = re.search(
-            r"סה.?\"?כ.? ?יגבה[^:]*:\s*([0-9,\.\s]+?)(?:\n|$)",
-            text,
-            flags=re.IGNORECASE,
-        )
-        if match:
-            token = re.sub(r"\s+", "", match.group(1))
-            total = parse_number(token)
-    if total is None or (total is not None and total <= 5):
-        match = re.search(
-            r"סה.{0,4}?יגבה[^:]*:\s*((?:.|\n)*?)\n\s*4",
-            text,
-            flags=re.IGNORECASE,
-        )
-        if match:
-            block = match.group(1)
-            token = re.sub(r"[^0-9.,]", "", block)
-            total = parse_number(token)
-            if (total is None or total < 50 or "\n" in block) and token:
-                reversed_token = token[::-1]
-                alt = parse_number(reversed_token)
-                if alt is not None:
-                    total = alt
-    if total is None:
-        match = re.search(r"סה.?\"?כ.? ?יגבה[^0-9]+([\d.,]+)", text)
-        if match:
-            total = parse_number(match.group(1))
-    if block_max:
-        if total is None or (block_max > total and block_max - total > 50):
-            total = block_max
-    if total is None:
-        matches = re.findall(r"₪\s*([\d.,]+)\s*[:\-]?\s*כ[\"״']?הס", text)
-        amounts = [parse_number(token) for token in matches]
-        numeric = [val for val in amounts if val is not None]
-        if numeric:
-            total = max(numeric)
-    fallback_total = select_amount(currency_tokens[::-1])
-    if total is None:
-        total = fallback_total
-    elif fallback_total and fallback_total < total and (total - fallback_total) > 50:
-        total = fallback_total
-    elif total is not None and total <= 5 and fallback_total and fallback_total > total:
-        total = fallback_total
-    marker_total = extract_total_from_total_with_vat_lines(lines, currency_tokens)
-    if marker_total is not None and (total is None or abs(marker_total - total) > 1.0):
-        total = marker_total
-    marker_vat = extract_vat_from_percent_lines(
-        lines,
-        currency_tokens,
-        total=total,
-        explicit_vat_rate=explicit_vat_rate,
-    )
-    if marker_vat is not None and (vat is None or abs(marker_vat - vat) > 1.0):
-        vat = marker_vat
-    if base_candidates:
-        candidates = base_candidates[:]
-        if total is not None:
-            below_total = [val for val in candidates if val < total]
-            if below_total:
-                candidates = below_total
-        if candidates:
-            base_before_vat = max(candidates)
-    dbg(f"total after heuristics={total}, base_before_vat={base_before_vat}")
-
-    if base_before_vat is None and total is not None and total_values:
-        approx_base = total / 1.18 if total > 0 else None
-        if approx_base:
-            candidates = [val for val in total_values if 0 < val < total]
-            if candidates:
-                base_before_vat = min(candidates, key=lambda val: abs(val - approx_base))
-
-    if vat is None:
-        vat_patterns = [
-            r"סה.?\"?כ.? ?מע\"?מ[^\d]*([\d.,]+)",
-            r"([\d.,]+)\s+סה.?\"?כ.? ?מע\"?מ",
-            r"מ\"?עמ[^\n]{0,30}?כ.?\"?הס[^\d]*([\d.,]+)",
-            r"([\d.,]+)\s+כ.?\"?הס[^\n]{0,30}?מ\"?עמ",
-        ]
-        for pattern in vat_patterns:
-            match = re.search(pattern, text, flags=re.MULTILINE | re.DOTALL)
-            if match:
-                vat = parse_number(match.group(1))
-                if vat is not None:
-                    break
-    if vat is None:
-        vat = amount_near_markers(
-            text,
-            [
-                r"סה.?\"?כ.? ?מע\"?מ",
-                r"מ\"?עמ[^\n]{0,30}?כ.?\"?הס",
-            ],
-            prefer="min",
-        )
-    if vat is None:
-        for line in lines:
-            if 'מ"עמ' in line:
-                if 'מ"עמל' in line and "₪" not in line and "%" not in line:
-                    continue
-                tokens = re.findall(r"[\d.,]+", line)
-                amount = select_amount(tokens[::-1])
-                if amount is not None:
-                    vat = amount
-                    break
-            if vat is not None:
-                break
-
-    if total is not None and vat_candidates:
-        filtered_vat = sorted(val for val in vat_candidates if 0 < val < total)
-        replacement_vat = None
-        for candidate in filtered_vat:
-            rate_candidate = vat_rate_estimate(total, candidate)
-            if rate_candidate is None or abs(rate_candidate - 18.0) < 1.0:
-                replacement_vat = candidate
-                break
-        if replacement_vat is None and filtered_vat:
-            replacement_vat = filtered_vat[0]
-        if replacement_vat is not None:
-            vat = replacement_vat
-
-    if vat is None and total is not None and base_before_vat is not None:
-        candidate_vat = round(total - base_before_vat, 2)
-        if candidate_vat >= 0:
-            vat = candidate_vat
-
-    if vat is not None and total is not None and vat > total:
-        vat = None
-    if vat is None:
-        vat = amount_near_markers(
-            text,
-            [
-                r"סה.?\"?כ.? ?מע\"?מ",
-                r"מ\"?עמ[^\n]{0,30}?כ.?\"?הס",
-            ],
-            prefer="min",
-        )
-
-    if (
-        vat is None
-        and total is not None
-        and base_before_vat is not None
-        and base_before_vat < total
-    ):
-        vat_candidate = round(total - base_before_vat, 2)
-        if vat_candidate >= 0:
-            vat = vat_candidate
-
-    currency_amounts: List[float] = []
-    if total is not None or vat is not None:
-        for token in currency_tokens:
-            amount = parse_number(token)
-            if amount is not None:
-                currency_amounts.append(amount)
-    dbg(f"currency_amounts={currency_amounts}")
-
-    if vat is None and total is not None:
-        smaller = [amt for amt in currency_amounts if amt < total]
-        if smaller:
-            vat_candidate = round(total - max(smaller), 2)
-            if vat_candidate >= 0:
-                vat = vat_candidate
-    elif vat is not None and total is not None:
-        smaller = [amt for amt in currency_amounts if amt < total]
-        if smaller:
-            vat_candidate = round(total - max(smaller), 2)
-            if 0 < vat_candidate < vat:
-                vat = vat_candidate
-
-    rate = vat_rate_estimate(total, vat)
-    dbg(f"vat after heuristics={vat}, vat_rate={rate}")
-    if (
-        rate is not None
-        and total is not None
-        and base_before_vat is not None
-        and base_before_vat < total
-        and abs(rate - 18.0) > 1.0
-    ):
-        recalculated_vat = round(total - base_before_vat, 2)
-        if recalculated_vat >= 0:
-            vat = recalculated_vat
-            dbg(f"vat replaced via base diff → {vat}")
-
-    if total is not None and vat is not None:
-        candidate_base = round(total - vat, 2)
-        if candidate_base >= 0:
-            if base_before_vat is None or abs(base_before_vat - candidate_base) > 1.0:
-                base_before_vat = candidate_base
-
-    municipal_markers = [
-        "ארנונה",
-        "עיריית",
-        "רשות מקומית",
-        "תאגיד מים",
-        "onecity",
-    ]
-    is_municipal = any(marker in text for marker in municipal_markers)
-    if not is_municipal:
-        if (("פתח תק" in text) or ("הווקת חתפ" in text)) and ("חוב" in text):
-            is_municipal = True
-    block_source = pdfminer_lines or lines
-    block_sum, breakdown_values = sum_numeric_block(
-        block_source,
-        ['ח"שב', "חשב כ"],
-        [
-            "סכנה",
-            "סה",
-            'סה"',
-            "סה''כ יגבה",
-            'סה"כ יגבה',
-            'סה"כ יגבה',
-            "Sample text",
-            "ללוכ בויח",
-            "ןובשחה טוריפ",
-            "עצבמב לולכ",
-        ],
-    )
-    stingtv_breakdown = extract_stingtv_breakdown(text)
-    if stingtv_breakdown:
-        block_sum = sum(stingtv_breakdown) if stingtv_breakdown else None
-        breakdown_values = stingtv_breakdown
-    if is_municipal:
-        if block_sum is not None:
-            if total is None or total < 50 or abs(total - block_sum) > 1.0:
-                total = block_sum
-                dbg(f"municipal total derived from block sum={total}")
-        vat = 0.0
-        dbg("municipal invoice detected → forcing VAT=0")
-
-    return {
-        "invoice_total": total,
-        "invoice_vat": vat,
-        "vat_rate": explicit_vat_rate
-        if explicit_vat_rate is not None
-        else vat_rate_estimate(total, vat),
-        "municipal": is_municipal,
-        "breakdown_sum": block_sum,
-        "breakdown_values": breakdown_values,
-        "base_before_vat": base_before_vat,
-    }
-
-
-def parse_invoice(path: Path, debug: bool = False) -> InvoiceRecord:
-    try:
-        text_pdfminer = extract_text(path)
-    except Exception:  # pragma: no cover - defensive
-        text_pdfminer = ""
-
-    if not text_pdfminer:
-        return InvoiceRecord(
-            source_file=path.name,
-            notes="extract_text_failed",
-        )
-
-    text = text_pdfminer
-    used_fallback = False
-    fallback_text = ""
-    if needs_fallback_text(text_pdfminer):
-        fallback_text = extract_text_with_pymupdf(path)
-        if fallback_text:
-            text = fallback_text
-            used_fallback = True
-
-    if fallback_text:
-        pymupdf_text_cache: Optional[str] = fallback_text
-        pymupdf_lines_cache: Optional[List[str]] = extract_lines(fallback_text)
-    else:
-        pymupdf_text_cache = None
-        pymupdf_lines_cache = None
-
-    def ensure_pymupdf_data() -> None:
-        nonlocal pymupdf_text_cache, pymupdf_lines_cache
-        if pymupdf_text_cache is not None:
-            return
-        if not HAVE_PYMUPDF:
-            pymupdf_text_cache = ""
-            pymupdf_lines_cache = []
-            return
-        extra = extract_text_with_pymupdf(path)
-        pymupdf_text_cache = extra or ""
-        pymupdf_lines_cache = extract_lines(pymupdf_text_cache) if pymupdf_text_cache else []
-
-    def get_pymupdf_text() -> str:
-        ensure_pymupdf_data()
-        return pymupdf_text_cache or ""
-
-    def get_pymupdf_lines() -> List[str]:
-        ensure_pymupdf_data()
-        return pymupdf_lines_cache or []
-
-    lines = extract_lines(text)
-    if debug:
-        print(f"\n[debug][{path.name}] === pdfminer text preview ===")
-        preview_pdfminer = "\n".join(text_pdfminer.replace("\r", "\n").splitlines()[:40])
-        print(preview_pdfminer or "(no text extracted)")
-        if fallback_text:
-            print(f"\n[debug][{path.name}] === PyMuPDF text preview ===")
-            preview_pymupdf = "\n".join(fallback_text.replace("\r", "\n").splitlines()[:40])
-            print(preview_pymupdf or "(no fallback text)")
-        print(f"\n[debug][{path.name}] === normalized lines preview ===")
-        preview = "\n".join(lines[:40])
-        print(preview or "(no text extracted)")
-
-    record = InvoiceRecord(source_file=path.name)
-    record.invoice_id = infer_invoice_id(lines, text)
-    record.invoice_date = infer_invoice_date(text)
-    invoice_from = infer_invoice_from(lines, text)
-    if not invoice_from or invoice_from.startswith(":"):
-        extra_text = get_pymupdf_text()
-        extra_lines = get_pymupdf_lines()
-        if extra_text and extra_lines:
-            alt_from = infer_invoice_from(extra_lines, extra_text)
-            if alt_from:
-                invoice_from = alt_from
-    if invoice_from and len(invoice_from) > 120:
-        invoice_from = invoice_from[:117] + "..."
-    record.invoice_from = invoice_from
-    invoice_for = infer_invoice_for(lines, text)
-    if not invoice_for:
-        extra_text = get_pymupdf_text()
-        extra_lines = get_pymupdf_lines()
-        if extra_text and extra_lines:
-            invoice_for = infer_invoice_for(extra_lines, extra_text)
-    record.invoice_for = invoice_for
-    lines_pdfminer = extract_lines(text_pdfminer)
-    totals = infer_totals(
+) -> report_totals.TotalsResult:
+    return report_totals.infer_totals(
         lines,
         text,
         debug=debug,
-        label=path.name,
-        pdfminer_lines=lines_pdfminer,
+        label=label,
+        pdfminer_lines=pdfminer_lines,
     )
-    if any(marker in text for marker in ("פרטנר", "partner", "Partner")):
-        partner_totals = extract_partner_totals_from_pdf(path)
-        if partner_totals:
-            for key, value in partner_totals.items():
-                if value is not None:
-                    totals[key] = value
-            if debug:
-                print(
-                    f"[debug][{path.name}] partner periodic totals override "
-                    f"total={totals.get('invoice_total')} vat={totals.get('invoice_vat')} "
-                    f"base={totals.get('base_before_vat')}"
-                )
-    record.invoice_total = totals.get("invoice_total")
-    record.invoice_vat = totals.get("invoice_vat")
-    record.breakdown_sum = totals.get("breakdown_sum")
-    if totals.get("breakdown_values"):
-        record.breakdown_values = totals["breakdown_values"]
-    record.base_before_vat = totals.get("base_before_vat")
-    record.vat_rate = totals.get("vat_rate")
-    record.municipal = totals.get("municipal")
-    if (
-        record.breakdown_sum is not None
-        and record.invoice_total is not None
-        and abs(record.breakdown_sum - record.invoice_total) > 1.0
-    ):
-        if record.notes:
-            record.notes += "; "
-        else:
-            record.notes = ""
-        record.notes += "Total differs from breakdown sum"
-    if totals.get("municipal"):
-        if not record.invoice_from:
-            if "פתח תק" in text or "הווקת חתפ" in text:
-                record.invoice_from = "עיריית פתח תקווה"
-            else:
-                record.invoice_from = "רשות מקומית"
-        if record.invoice_vat is None:
-            record.invoice_vat = 0.0
-    period_start, period_end, period_label = extract_period_info(text)
-    record.period_start = period_start
-    record.period_end = period_end
-    record.period_label = period_label
-    record.due_date = extract_due_date(text)
-    references = extract_reference_numbers(text)
-    if references:
-        record.reference_numbers = references
-    category, category_confidence, category_rule = classify_invoice(
-        text, record.invoice_from, bool(record.municipal)
+
+
+def parse_invoice(path: Path, debug: bool = False) -> InvoiceRecord:
+    deps = report_parser.ParserDeps(
+        extract_text=extract_text,
+        needs_fallback_text=needs_fallback_text,
+        extract_text_with_pymupdf=extract_text_with_pymupdf,
+        extract_lines=extract_lines,
+        infer_invoice_id=infer_invoice_id,
+        infer_invoice_date=infer_invoice_date,
+        infer_invoice_from=infer_invoice_from,
+        infer_invoice_for=infer_invoice_for,
+        infer_totals=infer_totals,
+        extract_partner_totals_from_pdf=extract_partner_totals_from_pdf,
+        extract_period_info=extract_period_info,
+        extract_due_date=extract_due_date,
+        extract_reference_numbers=extract_reference_numbers,
+        classify_invoice=classify_invoice,
+        file_sha256=file_sha256,
+        compute_parse_confidence=lambda rec: compute_parse_confidence(cast(InvoiceRecord, rec)),
+        record_factory=lambda source_file: InvoiceRecord(source_file=source_file),
+        have_pymupdf=HAVE_PYMUPDF,
     )
-    record.category = category
-    record.category_confidence = category_confidence
-    record.category_rule = category_rule
-    record.data_source = "pymupdf" if used_fallback else "pdfminer"
-    record.duplicate_hash = file_sha256(path)
-    record.parse_confidence = compute_parse_confidence(record)
-    if debug:
-        if used_fallback:
-            print(f"[debug][{path.name}] used PyMuPDF fallback for text extraction")
-        print(
-            f"[debug][{path.name}] summary: total={record.invoice_total} "
-            f"vat={record.invoice_vat} id={record.invoice_id} from={record.invoice_from}"
-        )
-    return record
+    return cast(InvoiceRecord, report_parser.parse_invoice(path, debug=debug, deps=deps))
 
 
 def parse_invoices(path: Path, debug: bool = False) -> List[InvoiceRecord]:
-    record = parse_invoice(path, debug=debug)
-    return split_municipal_multi_invoice(path, record, debug=debug)
+    return cast(
+        List[InvoiceRecord],
+        report_pipeline.parse_path(
+            path,
+            debug=debug,
+            parse_invoice_fn=lambda target, dbg: parse_invoice(target, debug=dbg),
+            split_municipal_multi_invoice_fn=lambda target,
+            record,
+            dbg: split_municipal_multi_invoice(
+                target,
+                record,
+                debug=dbg,
+            ),
+        ),
+    )
 
 
 def generate_report(
@@ -2246,10 +1082,9 @@ def _format_pdf_value(field: str, value: object) -> str:
     if value is None:
         return ""
     if field in {"base_before_vat", "invoice_vat", "invoice_total"}:
-        try:
+        if isinstance(value, (int, float)):
             return f"{float(value):,.2f}"
-        except (TypeError, ValueError):
-            return ""
+        return ""
     compact = " ".join(str(value).split())
     if len(compact) > 120:
         return compact[:117] + "..."

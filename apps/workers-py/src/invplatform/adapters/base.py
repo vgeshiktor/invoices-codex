@@ -21,6 +21,7 @@ class MessageMeta:
     web_link: Optional[str] = None
     preview: str = ""
     has_attachments: bool = False
+    folder: Optional[str] = None
 
 
 class MailAdapter(Protocol):

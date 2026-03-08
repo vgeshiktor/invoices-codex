@@ -53,7 +53,7 @@ class DummyAdapter:
         return f"{message.id}:{attachment.id}".encode()
 
 
-def test_fetch_invoices_placeholder_returns_empty(monkeypatch):
+def test_fetch_invoices_returns_attachment_matches():
     adapter = DummyAdapter(
         [
             base.MessageMeta(
@@ -61,9 +61,54 @@ def test_fetch_invoices_placeholder_returns_empty(monkeypatch):
                 subject="Invoice",
                 sender="sender@example.com",
                 received="2025-01-01T00:00:00Z",
+                has_attachments=True,
             )
         ]
     )
     config = fetch_uc.FetchConfig(start_date="2025-01-01", end_date="2025-02-01")
     result = fetch_uc.fetch_invoices(adapter, config)
-    assert result == []
+    assert [msg.id for msg in result] == ["m1"]
+
+
+def test_fetch_invoices_filters_date_sent_and_keywords():
+    adapter = DummyAdapter(
+        [
+            base.MessageMeta(
+                id="in-range-attachment",
+                subject="Receipt attached",
+                sender="billing@example.com",
+                received="2025-01-15T10:00:00Z",
+                has_attachments=True,
+            ),
+            base.MessageMeta(
+                id="in-range-keyword",
+                subject="חשבונית מס קבלה",
+                sender="billing@example.com",
+                received="2025-01-12T09:00:00Z",
+                has_attachments=False,
+            ),
+            base.MessageMeta(
+                id="out-of-range",
+                subject="Invoice",
+                sender="billing@example.com",
+                received="2025-02-15T10:00:00Z",
+                has_attachments=True,
+            ),
+            base.MessageMeta(
+                id="sent-folder",
+                subject="Invoice",
+                sender="me@example.com",
+                received="2025-01-16T10:00:00Z",
+                has_attachments=True,
+                folder="sentitems",
+            ),
+        ]
+    )
+    config = fetch_uc.FetchConfig(
+        start_date="2025-01-01",
+        end_date="2025-02-01",
+        exclude_sent=True,
+        max_messages=10,
+    )
+    result = fetch_uc.fetch_invoices(adapter, config)
+    assert [msg.id for msg in result] == ["in-range-attachment", "in-range-keyword"]
