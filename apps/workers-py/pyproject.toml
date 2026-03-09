@@ -19,7 +19,7 @@ dependencies = [
   "pytest",
   "pytest-cov",
   "coverage",
-  "uvicorn",
+  "uvicorn[standard]",
   "pdfminer.six",
   "pypdf",
   "rapidfuzz"
