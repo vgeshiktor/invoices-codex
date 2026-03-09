@@ -25,6 +25,18 @@ Monorepo for invoice discovery, PDF collection, and invoice reporting across Gma
 - `docs/USAGE.md`: full command reference and how-to usage for all current functionality.
 - `docs/PRD_V1_SAAS.md`: Week 1 SaaS MVP product requirements and acceptance criteria.
 - `docs/ARCHITECTURE.md`: Week 1 SaaS HLD, domain model, and component boundaries.
+- `docs/FRONTEND_CONVERSION_BACKLOG.md`: KISS frontend conversion plan from epics to sprint-ready tasks.
+- `docs/FRONTEND_GITHUB_ISSUES.md`: prefilled GitHub issue blocks for every FE/BE task in the frontend backlog.
+- `docs/FRONTEND_WEEK1_EXECUTION_PLAN.md`: day-by-day Week 1 execution sequence with owners, checkpoints, and exit criteria.
+- `docs/FRONTEND_WEEK2_EXECUTION_PLAN.md`: day-by-day Week 2 auth execution sequence (`BE-001`, `FE-101..FE-104`).
+- `docs/FRONTEND_WEEK3_EXECUTION_PLAN.md`: day-by-day Week 3 provider execution sequence (`BE-101`, `BE-102`, `FE-201..FE-203`).
+- `docs/FRONTEND_WEEK4_EXECUTION_PLAN.md`: day-by-day Week 4 collection run execution sequence (`BE-201`, `FE-301`, `FE-302`).
+- `docs/FRONTEND_WEEK5_EXECUTION_PLAN.md`: day-by-day Week 5 orchestration/retry execution sequence (`BE-202`, `FE-303`, `FE-304`).
+- `docs/FRONTEND_WEEK6_EXECUTION_PLAN.md`: day-by-day Week 6 report UX execution sequence (`FE-401..FE-405`).
+- `docs/FRONTEND_WEEK7_EXECUTION_PLAN.md`: day-by-day Week 7 scheduling baseline execution sequence (`BE-301`, `FE-501`, `FE-502`).
+- `docs/FRONTEND_WEEK8_EXECUTION_PLAN.md`: day-by-day Week 8 scheduling runtime execution sequence (`BE-302`, `FE-503`).
+- `docs/FRONTEND_WEEK9_EXECUTION_PLAN.md`: day-by-day Week 9 observability/traceability execution sequence (`BE-401`, `FE-601..FE-605`).
+- `docs/FRONTEND_WEEK10_EXECUTION_PLAN.md`: day-by-day Week 10 quality/release hardening execution sequence (`FE-701..FE-705`).
 - `docs/STAKEHOLDER_DEMO_RUNBOOK.md`: complete script for stakeholder demo (control-plane + runtime alignment).
 - `docs/ADR/`: architecture decision records for SaaS conversion path.
 - `docs/META_BILLING_GRAPH_API_EXPLORER.md`: ready-to-paste Graph API Explorer URLs for Meta billing diagnostics.
