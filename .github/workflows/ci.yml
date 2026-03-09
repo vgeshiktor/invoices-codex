@@ -32,4 +32,4 @@ jobs:
           PYTHONPATH=apps/workers-py/src python -m ruff check apps/workers-py/src tests
       - name: Python tests
         run: |
-          PYTHONPATH=apps/workers-py/src python -m pytest tests -q
+          make test COVERAGE_MIN=80

@@ -1,0 +1,654 @@
+import json
+import time
+from dataclasses import asdict, dataclass
+from datetime import date, datetime
+from pathlib import Path
+from uuid import uuid4
+
+from sqlalchemy.orm import Session, sessionmaker
+
+from .db import build_engine, build_session_factory
+from .metrics import MetricsRegistry
+from .models import ApiKey, Base, InvoiceRecord, ParseJob, Report, ReportArtifact, Tenant
+from .queue import build_queue
+from .service import SaaSService
+from .storage import StorageBackend, build_storage
+
+
+@dataclass
+class ApiAppConfig:
+    database_url: str = "sqlite:///./invoices_saas.db"
+    redis_url: str | None = None
+    storage_url: str = "local://./data/saas_storage"
+    control_plane_api_key: str | None = None
+
+
+def _normalize_action(method: str, route_path: str) -> str:
+    normalized = route_path.strip("/").replace("/", ".").replace("{", "").replace("}", "")
+    if not normalized:
+        normalized = "root"
+    return f"{method.lower()}.{normalized}"
+
+
+def _iso(value: datetime | None) -> str | None:
+    return value.isoformat() if value else None
+
+
+def _api_key_to_dict(row: ApiKey) -> dict[str, object]:
+    return {
+        "id": row.id,
+        "tenant_id": row.tenant_id,
+        "key_prefix": row.key_prefix,
+        "revoked": bool(row.revoked),
+        "created_at": _iso(row.created_at),
+        "revoked_at": _iso(row.revoked_at),
+    }
+
+
+def _tenant_to_dict(row: Tenant) -> dict[str, object]:
+    return {
+        "id": row.id,
+        "name": row.name,
+        "created_at": _iso(row.created_at),
+    }
+
+
+def _job_to_dict(job: ParseJob) -> dict[str, object]:
+    return {
+        "id": job.id,
+        "tenant_id": job.tenant_id,
+        "status": job.status,
+        "idempotency_key": job.idempotency_key,
+        "queue_job_id": job.queue_job_id,
+        "debug": job.debug,
+        "records_count": job.records_count,
+        "failed_count": job.failed_count,
+        "error_message": job.error_message,
+        "created_at": _iso(job.created_at),
+        "started_at": _iso(job.started_at),
+        "finished_at": _iso(job.finished_at),
+    }
+
+
+def _build_service(config: ApiAppConfig) -> SaaSService:
+    engine = build_engine(config.database_url)
+    Base.metadata.create_all(bind=engine)
+    session_factory: sessionmaker[Session] = build_session_factory(
+        engine, enforce_tenant_guard=True
+    )
+    queue = build_queue(config.redis_url)
+    return SaaSService(session_factory=session_factory, queue=queue)
+
+
+def _invoice_to_dict(row: InvoiceRecord) -> dict[str, object]:
+    return {
+        "id": row.id,
+        "parse_job_id": row.parse_job_id,
+        "vendor": row.vendor,
+        "file_name": row.file_name,
+        "invoice_number": row.invoice_number,
+        "invoice_date": row.invoice_date.isoformat() if row.invoice_date else None,
+        "invoice_total": row.invoice_total,
+        "invoice_vat": row.invoice_vat,
+        "currency": row.currency,
+        "purpose": row.purpose,
+    }
+
+
+def _report_to_dict(row: Report, artifacts: list[ReportArtifact]) -> dict[str, object]:
+    try:
+        requested_formats = list(json.loads(row.requested_formats_json))
+    except Exception:
+        requested_formats = []
+    try:
+        filters = json.loads(row.filters_json)
+    except Exception:
+        filters = {}
+
+    return {
+        "id": row.id,
+        "tenant_id": row.tenant_id,
+        "status": row.status,
+        "idempotency_key": row.idempotency_key,
+        "queue_job_id": row.queue_job_id,
+        "error_message": row.error_message,
+        "requested_formats": requested_formats,
+        "filters": filters,
+        "created_at": _iso(row.created_at),
+        "started_at": _iso(row.started_at),
+        "finished_at": _iso(row.finished_at),
+        "artifacts": [
+            {
+                "id": artifact.id,
+                "format": artifact.format,
+                "storage_path": artifact.storage_path,
+                "bytes": artifact.bytes,
+            }
+            for artifact in artifacts
+        ],
+    }
+
+
+def create_app(config: ApiAppConfig | None = None):
+    try:
+        from fastapi import (  # type: ignore[import-not-found]
+            Depends,
+            FastAPI,
+            File,
+            Header,
+            HTTPException,
+            Query,
+            Request,
+            Security,
+            UploadFile,
+        )
+        from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
+        from fastapi.security import APIKeyHeader
+        from pydantic import BaseModel
+    except ModuleNotFoundError as exc:  # pragma: no cover - environment dependent
+        raise RuntimeError(
+            "FastAPI stack is not installed. Install fastapi and uvicorn to run the SaaS API."
+        ) from exc
+
+    cfg = config or ApiAppConfig()
+    service = _build_service(cfg)
+    storage = build_storage(cfg.storage_url)
+    metrics = MetricsRegistry()
+    app = FastAPI(
+        title="Invoices SaaS API",
+        version="0.1.0",
+        docs_url="/swagger",
+        redoc_url="/redoc",
+        openapi_url="/openapi.json",
+    )
+    app.state.config = asdict(cfg)
+    app.state.service = service
+    app.state.storage = storage
+    app.state.metrics = metrics
+
+    class ParseJobRequest(BaseModel):
+        file_ids: list[str]
+        debug: bool = False
+
+    class ReportRequest(BaseModel):
+        parse_job_ids: list[str] | None = None
+        formats: list[str] | None = None
+        filters: dict[str, object] | None = None
+
+    class TenantBootstrapRequest(BaseModel):
+        name: str
+
+    def get_service() -> SaaSService:
+        return app.state.service  # type: ignore[no-any-return]
+
+    def get_storage() -> StorageBackend:
+        return app.state.storage  # type: ignore[no-any-return]
+
+    def get_metrics() -> MetricsRegistry:
+        return app.state.metrics  # type: ignore[no-any-return]
+
+    def get_actor(x_actor: str | None = Header(default=None, alias="X-Actor")) -> str | None:
+        return x_actor
+
+    api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False, scheme_name="ApiKeyAuth")
+    control_plane_key_header = APIKeyHeader(
+        name="X-Control-Plane-Key",
+        auto_error=False,
+        scheme_name="ControlPlaneKeyAuth",
+    )
+    control_plane_api_key = (cfg.control_plane_api_key or "").strip() or None
+
+    def require_control_plane_access(
+        x_control_plane_key: str | None = Security(control_plane_key_header),
+    ) -> None:
+        if control_plane_api_key is None:
+            raise HTTPException(status_code=503, detail="control plane is disabled")
+        if x_control_plane_key != control_plane_api_key:
+            raise HTTPException(status_code=401, detail="invalid control plane key")
+
+    def get_tenant_id(
+        request: Request,
+        x_api_key: str | None = Security(api_key_header),
+        service: SaaSService = Depends(get_service),
+    ) -> str:
+        if not x_api_key:
+            raise HTTPException(status_code=401, detail="missing API key")
+        cached_tenant_id = getattr(request.state, "tenant_id", None)
+        if isinstance(cached_tenant_id, str) and cached_tenant_id:
+            return cached_tenant_id
+        tenant = service.get_tenant_by_api_key(x_api_key)
+        if tenant is None:
+            raise HTTPException(status_code=401, detail="invalid API key")
+        request.state.tenant_id = tenant.id
+        return tenant.id
+
+    @app.middleware("http")
+    async def request_audit_middleware(request: Request, call_next):  # type: ignore[no-untyped-def]
+        request_id = request.headers.get("X-Request-ID") or str(uuid4())
+        request.state.request_id = request_id
+        actor = request.headers.get("X-Actor")
+        start = time.perf_counter()
+
+        tenant_id: str | None = None
+        if request.url.path.startswith("/v1"):
+            api_key = request.headers.get("X-API-Key")
+            if api_key:
+                tenant = service.get_tenant_by_api_key(api_key)
+                if tenant is not None:
+                    tenant_id = tenant.id
+                    request.state.tenant_id = tenant_id
+
+        try:
+            response = await call_next(request)
+        except Exception as exc:
+            duration_ms = round((time.perf_counter() - start) * 1000, 2)
+            route = request.scope.get("route")
+            route_path = getattr(route, "path", request.url.path)
+            metrics.observe_http(request.method, route_path, 500, duration_ms)
+
+            if tenant_id is not None and request.url.path.startswith("/v1"):
+                route = request.scope.get("route")
+                route_path = getattr(route, "path", request.url.path)
+                event_type = f"api.{_normalize_action(request.method, route_path)}"
+                try:
+                    service.record_audit_event(
+                        tenant_id=tenant_id,
+                        event_type=event_type,
+                        actor=actor,
+                        payload={
+                            "request_id": request_id,
+                            "method": request.method,
+                            "path": request.url.path,
+                            "route": route_path,
+                            "query": str(request.url.query),
+                            "status_code": 500,
+                            "duration_ms": duration_ms,
+                            "error": exc.__class__.__name__,
+                        },
+                    )
+                except Exception:
+                    pass
+            raise
+
+        duration_ms = round((time.perf_counter() - start) * 1000, 2)
+        response.headers["X-Request-ID"] = request_id
+        route = request.scope.get("route")
+        route_path = getattr(route, "path", request.url.path)
+        metrics.observe_http(request.method, route_path, response.status_code, duration_ms)
+
+        if tenant_id is not None and request.url.path.startswith("/v1"):
+            event_type = f"api.{_normalize_action(request.method, route_path)}"
+            try:
+                service.record_audit_event(
+                    tenant_id=tenant_id,
+                    event_type=event_type,
+                    actor=actor,
+                    payload={
+                        "request_id": request_id,
+                        "method": request.method,
+                        "path": request.url.path,
+                        "route": route_path,
+                        "query": str(request.url.query),
+                        "status_code": response.status_code,
+                        "duration_ms": duration_ms,
+                    },
+                )
+            except Exception:
+                pass
+
+        return response
+
+    @app.get("/healthz")
+    def healthz() -> dict[str, str]:
+        return {"status": "ok"}
+
+    @app.get("/docs", include_in_schema=False)
+    def docs_redirect():
+        return RedirectResponse(url="/swagger")
+
+    @app.get("/metrics", include_in_schema=False)
+    def metrics_endpoint(metrics_registry: MetricsRegistry = Depends(get_metrics)):
+        return PlainTextResponse(
+            metrics_registry.render_prometheus(), media_type="text/plain; version=0.0.4"
+        )
+
+    @app.get("/dashboard", include_in_schema=False)
+    def dashboard_page():
+        html = """<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Invoices SaaS Dashboard</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 24px; color: #111; }
+    h1 { margin: 0 0 12px; }
+    .card { border: 1px solid #ddd; border-radius: 10px; padding: 14px; margin-bottom: 12px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
+    code { background: #f5f5f5; padding: 2px 4px; border-radius: 4px; }
+    .muted { color: #666; font-size: 14px; }
+    button { padding: 8px 12px; cursor: pointer; }
+    input { padding: 8px; width: 320px; max-width: 100%; }
+  </style>
+</head>
+<body>
+  <h1>Invoices SaaS Dashboard</h1>
+  <p class="muted">Use your tenant API key to load live summary. API docs: <a href="/swagger">/swagger</a></p>
+  <div class="card">
+    <input id="apiKey" placeholder="X-API-Key" />
+    <button onclick="loadSummary()">Load</button>
+    <div id="status" class="muted"></div>
+  </div>
+  <div id="content"></div>
+  <script>
+    async function loadSummary() {
+      const key = document.getElementById('apiKey').value.trim();
+      const status = document.getElementById('status');
+      const content = document.getElementById('content');
+      if (!key) { status.textContent = 'Missing API key'; return; }
+      status.textContent = 'Loading...';
+      const res = await fetch('/v1/dashboard/summary', { headers: { 'X-API-Key': key } });
+      if (!res.ok) {
+        status.textContent = 'Request failed: ' + res.status;
+        content.innerHTML = '';
+        return;
+      }
+      const data = await res.json();
+      status.textContent = 'OK. Request ID: ' + (res.headers.get('X-Request-ID') || '(none)');
+      content.innerHTML = `
+        <div class="grid">
+          <div class="card"><b>Files</b><div>${data.totals.files}</div></div>
+          <div class="card"><b>Parse Jobs</b><div>${data.totals.parse_jobs}</div></div>
+          <div class="card"><b>Invoices</b><div>${data.totals.invoices}</div></div>
+          <div class="card"><b>Reports</b><div>${data.totals.reports}</div></div>
+        </div>
+        <div class="card"><b>Parse Status</b><pre>${JSON.stringify(data.parse_jobs_by_status, null, 2)}</pre></div>
+        <div class="card"><b>Report Status</b><pre>${JSON.stringify(data.reports_by_status, null, 2)}</pre></div>
+        <div class="card"><b>Recent Parse Jobs</b><pre>${JSON.stringify(data.recent_parse_jobs, null, 2)}</pre></div>
+        <div class="card"><b>Recent Reports</b><pre>${JSON.stringify(data.recent_reports, null, 2)}</pre></div>
+      `;
+    }
+  </script>
+</body>
+</html>"""
+        return HTMLResponse(html)
+
+    @app.post("/v1/files", status_code=201)
+    async def register_file(
+        file: UploadFile = File(...),
+        tenant_id: str = Depends(get_tenant_id),
+        service: SaaSService = Depends(get_service),
+        storage: StorageBackend = Depends(get_storage),
+    ) -> dict[str, object]:
+        filename = Path(file.filename or "").name
+        if not filename:
+            raise HTTPException(status_code=400, detail="filename is required")
+        mime_type = file.content_type or "application/pdf"
+        if "pdf" not in mime_type.lower() and not filename.lower().endswith(".pdf"):
+            raise HTTPException(status_code=400, detail="only PDF uploads are supported")
+
+        data = await file.read()
+        if not data:
+            raise HTTPException(status_code=400, detail="uploaded file is empty")
+
+        stored_name = f"{uuid4().hex}_{filename}"
+        storage_key = f"uploads/{tenant_id}/{stored_name}"
+        stored = storage.save_bytes(storage_key, data)
+
+        file_row = service.register_file(
+            tenant_id=tenant_id,
+            filename=filename,
+            storage_path=stored.key,
+            mime_type=mime_type,
+            content_sha256=stored.sha256,
+            bytes_size=stored.size,
+        )
+        return {
+            "id": file_row.id,
+            "tenant_id": file_row.tenant_id,
+            "filename": file_row.filename,
+            "mime_type": file_row.mime_type,
+            "bytes": file_row.bytes,
+            "content_sha256": file_row.content_sha256,
+            "storage_path": file_row.storage_path,
+            "status": file_row.status,
+        }
+
+    @app.post("/v1/parse-jobs", status_code=202)
+    def create_parse_job(
+        request: ParseJobRequest,
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        tenant_id: str = Depends(get_tenant_id),
+        service: SaaSService = Depends(get_service),
+    ) -> dict[str, object]:
+        try:
+            job = service.create_parse_job(
+                tenant_id=tenant_id,
+                file_ids=request.file_ids,
+                debug=request.debug,
+                idempotency_key=idempotency_key,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _job_to_dict(job)
+
+    @app.get("/v1/parse-jobs/{parse_job_id}")
+    def get_parse_job(
+        parse_job_id: str,
+        tenant_id: str = Depends(get_tenant_id),
+        service: SaaSService = Depends(get_service),
+    ) -> dict[str, object]:
+        job = service.get_parse_job(tenant_id=tenant_id, parse_job_id=parse_job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="parse job not found")
+        return _job_to_dict(job)
+
+    @app.get("/v1/invoices")
+    def list_invoices(
+        parse_job_id: str | None = Query(default=None),
+        vendor: str | None = Query(default=None),
+        from_date: date | None = Query(default=None),
+        to_date: date | None = Query(default=None),
+        limit: int = Query(default=100, ge=1, le=1000),
+        offset: int = Query(default=0, ge=0),
+        tenant_id: str = Depends(get_tenant_id),
+        service: SaaSService = Depends(get_service),
+    ) -> dict[str, object]:
+        items, total = service.list_invoices(
+            tenant_id=tenant_id,
+            parse_job_id=parse_job_id,
+            vendor=vendor,
+            from_date=from_date,
+            to_date=to_date,
+            limit=limit,
+            offset=offset,
+        )
+        return {
+            "items": [_invoice_to_dict(item) for item in items],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
+
+    @app.get("/v1/invoices/{invoice_id}")
+    def get_invoice(
+        invoice_id: str,
+        tenant_id: str = Depends(get_tenant_id),
+        service: SaaSService = Depends(get_service),
+    ) -> dict[str, object]:
+        invoice = service.get_invoice(tenant_id=tenant_id, invoice_id=invoice_id)
+        if invoice is None:
+            raise HTTPException(status_code=404, detail="invoice not found")
+        return _invoice_to_dict(invoice)
+
+    @app.get("/v1/control-plane/tenants")
+    def list_control_plane_tenants(
+        limit: int = Query(default=100, ge=1, le=1000),
+        offset: int = Query(default=0, ge=0),
+        _control_plane: None = Depends(require_control_plane_access),
+        service: SaaSService = Depends(get_service),
+    ) -> dict[str, object]:
+        tenants, total = service.list_tenants(limit=limit, offset=offset)
+        return {
+            "items": [_tenant_to_dict(item) for item in tenants],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
+
+    @app.post("/v1/control-plane/tenants", status_code=201)
+    def create_control_plane_tenant(
+        request: TenantBootstrapRequest,
+        actor: str | None = Depends(get_actor),
+        _control_plane: None = Depends(require_control_plane_access),
+        service: SaaSService = Depends(get_service),
+    ) -> dict[str, object]:
+        tenant_name = request.name.strip()
+        if not tenant_name:
+            raise HTTPException(status_code=400, detail="tenant name is required")
+        tenant, plain_text_key = service.bootstrap_tenant(name=tenant_name, actor=actor)
+        return {
+            "tenant": _tenant_to_dict(tenant),
+            "api_key": {"plain_text": plain_text_key},
+        }
+
+    @app.get("/v1/dashboard/summary")
+    def dashboard_summary(
+        tenant_id: str = Depends(get_tenant_id),
+        service: SaaSService = Depends(get_service),
+    ) -> dict[str, object]:
+        return service.dashboard_summary(tenant_id=tenant_id)
+
+    @app.get("/v1/admin/api-keys")
+    def list_api_keys(
+        tenant_id: str = Depends(get_tenant_id),
+        service: SaaSService = Depends(get_service),
+    ) -> dict[str, object]:
+        items = service.list_api_keys(tenant_id=tenant_id)
+        return {"items": [_api_key_to_dict(item) for item in items], "total": len(items)}
+
+    @app.post("/v1/admin/api-keys", status_code=201)
+    def create_api_key(
+        tenant_id: str = Depends(get_tenant_id),
+        actor: str | None = Depends(get_actor),
+        service: SaaSService = Depends(get_service),
+    ) -> dict[str, object]:
+        item, plain_text = service.create_api_key(tenant_id=tenant_id, actor=actor)
+        return {"api_key": _api_key_to_dict(item), "plain_text": plain_text}
+
+    @app.post("/v1/admin/api-keys/{api_key_id}/rotate")
+    def rotate_api_key(
+        api_key_id: str,
+        tenant_id: str = Depends(get_tenant_id),
+        actor: str | None = Depends(get_actor),
+        service: SaaSService = Depends(get_service),
+    ) -> dict[str, object]:
+        try:
+            item, plain_text = service.rotate_api_key(
+                tenant_id=tenant_id, api_key_id=api_key_id, actor=actor
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"api_key": _api_key_to_dict(item), "plain_text": plain_text}
+
+    @app.post("/v1/admin/api-keys/{api_key_id}/revoke")
+    def revoke_api_key(
+        api_key_id: str,
+        tenant_id: str = Depends(get_tenant_id),
+        actor: str | None = Depends(get_actor),
+        service: SaaSService = Depends(get_service),
+    ) -> dict[str, object]:
+        try:
+            item = service.revoke_api_key(tenant_id=tenant_id, api_key_id=api_key_id, actor=actor)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"api_key": _api_key_to_dict(item)}
+
+    @app.post("/v1/reports", status_code=202)
+    def create_report(
+        request: ReportRequest,
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        tenant_id: str = Depends(get_tenant_id),
+        service: SaaSService = Depends(get_service),
+    ) -> dict[str, object]:
+        try:
+            report = service.create_report_job(
+                tenant_id=tenant_id,
+                parse_job_ids=request.parse_job_ids,
+                formats=request.formats,
+                filters=request.filters,
+                idempotency_key=idempotency_key,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        artifacts = service.list_report_artifacts(tenant_id=tenant_id, report_id=report.id)
+        return _report_to_dict(report, artifacts)
+
+    @app.get("/v1/reports")
+    def list_reports(
+        status: str | None = Query(default=None),
+        limit: int = Query(default=100, ge=1, le=1000),
+        offset: int = Query(default=0, ge=0),
+        tenant_id: str = Depends(get_tenant_id),
+        service: SaaSService = Depends(get_service),
+    ) -> dict[str, object]:
+        reports, total = service.list_reports(
+            tenant_id=tenant_id,
+            status=status,
+            limit=limit,
+            offset=offset,
+        )
+        items = [
+            _report_to_dict(
+                report, service.list_report_artifacts(tenant_id=tenant_id, report_id=report.id)
+            )
+            for report in reports
+        ]
+        return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+    @app.get("/v1/reports/{report_id}")
+    def get_report(
+        report_id: str,
+        tenant_id: str = Depends(get_tenant_id),
+        service: SaaSService = Depends(get_service),
+    ) -> dict[str, object]:
+        report = service.get_report(tenant_id=tenant_id, report_id=report_id)
+        if report is None:
+            raise HTTPException(status_code=404, detail="report not found")
+        artifacts = service.list_report_artifacts(tenant_id=tenant_id, report_id=report.id)
+        return _report_to_dict(report, artifacts)
+
+    @app.get("/v1/reports/{report_id}/download")
+    def download_report(
+        report_id: str,
+        format: str = Query(...),
+        tenant_id: str = Depends(get_tenant_id),
+        service: SaaSService = Depends(get_service),
+        storage: StorageBackend = Depends(get_storage),
+    ):
+        report = service.get_report(tenant_id=tenant_id, report_id=report_id)
+        if report is None:
+            raise HTTPException(status_code=404, detail="report not found")
+        artifacts = service.list_report_artifacts(tenant_id=tenant_id, report_id=report.id)
+        artifact = next((item for item in artifacts if item.format == format), None)
+        if artifact is None:
+            raise HTTPException(status_code=404, detail="artifact not found")
+        from fastapi.responses import FileResponse  # type: ignore[import-not-found]
+
+        artifact_path = storage.resolve_local_path(artifact.storage_path)
+        return FileResponse(path=str(artifact_path), filename=artifact_path.name)
+
+    @app.post("/v1/reports/{report_id}/retry", status_code=202)
+    def retry_report(
+        report_id: str,
+        tenant_id: str = Depends(get_tenant_id),
+        service: SaaSService = Depends(get_service),
+    ) -> dict[str, object]:
+        try:
+            report = service.retry_report_job(tenant_id=tenant_id, report_id=report_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        artifacts = service.list_report_artifacts(tenant_id=tenant_id, report_id=report.id)
+        return _report_to_dict(report, artifacts)
+
+    return app

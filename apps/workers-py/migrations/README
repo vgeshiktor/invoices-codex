@@ -1,0 +1,10 @@
+Run migrations from `apps/workers-py`:
+
+1. Install alembic:
+   - `pip install alembic`
+
+2. Apply migrations:
+   - `alembic upgrade head`
+
+3. Generate a new migration revision:
+   - `alembic revision -m "short description"`

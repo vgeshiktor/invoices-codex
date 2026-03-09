@@ -1,0 +1,14 @@
+[
+  {
+    "id": "ded38518-2fe0-46b5-a257-ab6778cab1eb",
+    "parse_job_id": "a763babb-393e-4f5f-9079-44aae82051a2",
+    "vendor": "",
+    "file_name": "",
+    "invoice_number": null,
+    "invoice_date": null,
+    "invoice_total": 32.5,
+    "invoice_vat": 4.96,
+    "currency": "ILS",
+    "purpose": null
+  }
+]

@@ -9,20 +9,27 @@ Monorepo for invoice discovery, PDF collection, and invoice reporting across Gma
 - Monthly orchestration across providers with merge + dedup (`invplatform.cli.monthly_invoices`)
 - PDF quarantine utility for non-invoice files (`invplatform.cli.quarantine_invoices`)
 - Invoice parsing/report generation to JSON/CSV/Summary CSV/PDF (`invplatform.cli.invoices_report`)
+- SaaS skeleton foundations (Week 2+): SQLAlchemy models, API/worker skeleton, Alembic baseline, and pluggable storage adapters (local/S3)
+- SaaS control-plane demo endpoints for tenant bootstrap/listing (`/v1/control-plane/tenants`)
 - PDF report enhancements:
   - bilingual-safe rendering (Hebrew + English)
   - vendor grouping and optional vendor subtotal rows
   - configurable subtotal behavior (on/off, skip single-invoice vendors)
 - Duplicate removal utility script (`scripts/remove_duplicate_invoices.py`)
 - Minimal Go API service (`/healthz`) in `apps/api-go`
-- Local dev stack via Docker Compose including `api-go`, `workers-py`, `db`, `mq`, and `n8n`
+- Local dev stack via Docker Compose including `api-go`, `workers-py`, `saas-api`, `saas-rq-worker`, `db`, `mq`, `redis`, and `n8n`
 
 ## Documentation Map
 
 - `README.md` (this file): project overview + quick start + workflow map.
 - `docs/USAGE.md`: full command reference and how-to usage for all current functionality.
+- `docs/PRD_V1_SAAS.md`: Week 1 SaaS MVP product requirements and acceptance criteria.
+- `docs/ARCHITECTURE.md`: Week 1 SaaS HLD, domain model, and component boundaries.
+- `docs/STAKEHOLDER_DEMO_RUNBOOK.md`: complete script for stakeholder demo (control-plane + runtime alignment).
+- `docs/ADR/`: architecture decision records for SaaS conversion path.
 - `docs/META_BILLING_GRAPH_API_EXPLORER.md`: ready-to-paste Graph API Explorer URLs for Meta billing diagnostics.
-- `integrations/openapi/invoices.yaml`: API contract draft (broader than currently implemented Go handlers).
+- `integrations/openapi/invoices.yaml`: SaaS API v1 skeleton contract for files, parse jobs, invoices, and reports.
+- `integrations/openapi/saas-openapi.v0.1.0.json`: generated OpenAPI snapshot from the current FastAPI SaaS app.
 
 ## Documentation Approach
 
@@ -96,6 +103,13 @@ For complete options and examples, use `docs/USAGE.md`.
 
 - Implemented in Go:
   - `GET /healthz` -> `200 ok`
+- Implemented in Python SaaS API (`make run-saas-api`):
+  - `GET /swagger` -> interactive Swagger UI
+  - `GET /openapi.json` -> generated OpenAPI schema
+  - `make run-saas-openapi-export` -> versioned schema snapshot on disk
+  - `GET/POST /v1/control-plane/tenants` -> platform bootstrap/list tenants (requires `X-Control-Plane-Key`)
+  - `GET /dashboard` -> tenant-aware summary dashboard UI
+  - `GET /metrics` -> Prometheus text metrics
 - Not yet implemented in current Go handler:
   - the full invoice CRUD suggested by `integrations/openapi/invoices.yaml`
 

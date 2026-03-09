@@ -258,6 +258,175 @@ Suggested workflow:
 - One-time/bootstrap command (manual): `make -C /workspace run-monthly MONTHLY_PROVIDERS=outlook GRAPH_INTERACTIVE_AUTH=1 GRAPH_TOKEN_CACHE_PATH=/home/node/.n8n/msal_graph_invoice_cache.bin`
 
 Notes:
+
+## 10. SaaS API Skeleton (Week 2)
+
+The repo now includes a Week 2 SaaS skeleton:
+- SQLAlchemy models for tenant/files/parse jobs/reports/audit events
+- service layer with API-key resolution and parse-job creation
+- worker runner for parse-job execution
+- OpenAPI v1 skeleton in `integrations/openapi/invoices.yaml`
+- API middleware adds:
+  - `X-Request-ID` response header for every request
+  - automatic tenant-scoped `api.*` audit events
+  - optional `X-Actor` attribution in audit events
+
+Run API (requires `fastapi` + `uvicorn`):
+
+```bash
+make run-saas-api SAAS_DATABASE_URL=sqlite:///./invoices_saas.db SAAS_STORAGE_URL=local://./data/saas_storage
+```
+
+Enable control-plane endpoints (tenant bootstrap/list):
+
+```bash
+make run-saas-api \
+  SAAS_DATABASE_URL=sqlite:///./invoices_saas.db \
+  SAAS_STORAGE_URL=local://./data/saas_storage \
+  SAAS_CONTROL_PLANE_API_KEY=dev-control-plane-key
+```
+
+After startup:
+- Swagger UI: `http://127.0.0.1:8080/swagger`
+- OpenAPI JSON: `http://127.0.0.1:8080/openapi.json`
+- Dashboard UI: `http://127.0.0.1:8080/dashboard`
+- Prometheus metrics: `http://127.0.0.1:8080/metrics`
+
+Swagger auth:
+- Click `Authorize` in Swagger UI and set the `X-API-Key` value.
+- Use the same tenant key used for curl examples below.
+- For control-plane endpoints, set `X-Control-Plane-Key`.
+
+Control-plane endpoints:
+- `GET /v1/control-plane/tenants`
+- `POST /v1/control-plane/tenants`
+
+Export a versioned OpenAPI snapshot (for release pinning):
+
+```bash
+make run-saas-openapi-export
+```
+
+Optional custom output path:
+
+```bash
+make run-saas-openapi-export SAAS_OPENAPI_OUTPUT=integrations/openapi/saas-openapi.custom.json
+```
+
+S3-compatible storage example:
+
+```bash
+make run-saas-api \
+  SAAS_DATABASE_URL=sqlite:///./invoices_saas.db \
+  SAAS_STORAGE_URL='s3://my-bucket/invoices?region=us-east-1&endpoint_url=https://s3.amazonaws.com'
+```
+
+Run one worker job by id:
+
+```bash
+make run-saas-worker SAAS_DATABASE_URL=sqlite:///./invoices_saas.db PARSE_JOB_ID=<job-id>
+```
+
+Run background queue worker loop (Redis + RQ):
+
+```bash
+make run-saas-rq-worker \
+  SAAS_DATABASE_URL=sqlite:///./invoices_saas.db \
+  SAAS_STORAGE_URL=local://./data/saas_storage \
+  SAAS_REDIS_URL=redis://127.0.0.1:6379/0
+```
+
+Control plane + runtime alignment demo (Docker Compose with Redis/RQ):
+
+```bash
+# 1) choose control-plane key in your shell
+export SAAS_CONTROL_PLANE_API_KEY=dev-control-plane-key
+
+# 2) start redis + saas api + rq worker
+make run-saas-demo-up
+
+# 3) create tenant and first API key
+curl -s -X POST http://127.0.0.1:8081/v1/control-plane/tenants \
+  -H "X-Control-Plane-Key: $SAAS_CONTROL_PLANE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Demo Tenant"}'
+
+# 4) open docs and dashboard for demo stack
+# http://127.0.0.1:8081/swagger
+# http://127.0.0.1:8081/dashboard
+
+# 5) tail logs (optional)
+make run-saas-demo-logs
+```
+
+Run retention cleanup for stale reports/artifacts:
+
+```bash
+make run-saas-cleanup \
+  SAAS_DATABASE_URL=sqlite:///./invoices_saas.db \
+  SAAS_STORAGE_URL=local://./data/saas_storage \
+  SAAS_RETENTION_DAYS=30
+```
+
+Enqueue cleanup to RQ (for cron/scheduler workflows):
+
+```bash
+make run-saas-enqueue-cleanup \
+  SAAS_DATABASE_URL=sqlite:///./invoices_saas.db \
+  SAAS_REDIS_URL=redis://127.0.0.1:6379/0 \
+  SAAS_RETENTION_DAYS=30
+```
+
+Run migrations (requires `alembic`):
+
+```bash
+cd apps/workers-py
+alembic upgrade head
+```
+
+Minimal local API flow:
+
+```bash
+# 1) bootstrap tenant and API key from Python REPL
+PYTHONPATH=apps/workers-py/src python - <<'PY'
+from invplatform.saas.api import ApiAppConfig, create_app
+app = create_app(ApiAppConfig(database_url="sqlite:///./invoices_saas.db"))
+tenant, key = app.state.service.bootstrap_tenant("Local Tenant")
+print("TENANT_ID=", tenant.id)
+print("API_KEY=", key)
+PY
+
+# 2) upload PDF
+curl -s -X POST http://127.0.0.1:8080/v1/files \
+  -H "X-API-Key: <API_KEY>" \
+  -F "file=@/absolute/path/to/invoice.pdf"
+
+# 3) create parse job
+curl -s -X POST http://127.0.0.1:8080/v1/parse-jobs \
+  -H "X-API-Key: <API_KEY>" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: local-job-001" \
+  -d '{"file_ids":["<FILE_ID>"],"debug":false}'
+
+# 4) list invoices
+curl -s "http://127.0.0.1:8080/v1/invoices?limit=100&offset=0" \
+  -H "X-API-Key: <API_KEY>"
+
+# 5) create report job
+curl -s -X POST http://127.0.0.1:8080/v1/reports \
+  -H "X-API-Key: <API_KEY>" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: local-report-001" \
+  -d '{"formats":["json","csv","summary_csv"]}'
+
+# 6) list reports
+curl -s "http://127.0.0.1:8080/v1/reports?status=succeeded&limit=50&offset=0" \
+  -H "X-API-Key: <API_KEY>"
+
+# 7) retry report
+curl -s -X POST "http://127.0.0.1:8080/v1/reports/<REPORT_ID>/retry" \
+  -H "X-API-Key: <API_KEY>"
+```
 - Repo is mounted in container at `/workspace`.
 - Ensure Gmail OAuth files exist in repo root if using Gmail flow.
 - Import ready-to-use n8n workflow JSON files:
@@ -326,6 +495,10 @@ Run all root tests:
 ```bash
 make test
 ```
+
+Coverage policy:
+- `make test` enforces minimum Python source coverage of `80%` (excluding `tests/*`).
+- Override locally if needed: `make test COVERAGE_MIN=85`
 
 Targeted test suites:
 

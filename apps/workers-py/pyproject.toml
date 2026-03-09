@@ -3,8 +3,15 @@ name = "workers"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
+  "alembic",
+  "boto3",
+  "fastapi",
+  "python-multipart",
   "httpx",
   "pydantic>=2",
+  "redis",
+  "rq",
+  "sqlalchemy",
   "tenacity",
   "python-dotenv",
   "ruff",
@@ -12,6 +19,7 @@ dependencies = [
   "pytest",
   "pytest-cov",
   "coverage",
+  "uvicorn",
   "pdfminer.six",
   "pypdf",
   "rapidfuzz"
