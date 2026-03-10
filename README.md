@@ -27,6 +27,8 @@ Monorepo for invoice discovery, PDF collection, and invoice reporting across Gma
 - `docs/ARCHITECTURE.md`: Week 1 SaaS HLD, domain model, and component boundaries.
 - `docs/FRONTEND_CONVERSION_BACKLOG.md`: KISS frontend conversion plan from epics to sprint-ready tasks.
 - `docs/FRONTEND_GITHUB_ISSUES.md`: prefilled GitHub issue blocks for every FE/BE task in the frontend backlog.
+- `docs/GITHUB_PROJECT_FIELD_MAPPING.md`: GitHub Project v2 field schema (`Status/Owner/Week`) and owner assignment mapping.
+- `docs/FRONTEND_PARALLEL_EXECUTION_MATRIX.md`: resource-loaded 10-week parallel delivery matrix with day-level assignments by role.
 - `docs/FRONTEND_WEEK1_EXECUTION_PLAN.md`: day-by-day Week 1 execution sequence with owners, checkpoints, and exit criteria.
 - `docs/FRONTEND_WEEK2_EXECUTION_PLAN.md`: day-by-day Week 2 auth execution sequence (`BE-001`, `FE-101..FE-104`).
 - `docs/FRONTEND_WEEK3_EXECUTION_PLAN.md`: day-by-day Week 3 provider execution sequence (`BE-101`, `BE-102`, `FE-201..FE-203`).
