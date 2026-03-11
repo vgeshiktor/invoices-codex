@@ -1,0 +1,71 @@
+.app {
+  margin: 2.5rem auto;
+  max-width: 860px;
+  padding: 0 1rem 2rem;
+}
+
+.app__header h1 {
+  font-size: 2rem;
+  margin-bottom: 0.4rem;
+}
+
+.app__header p {
+  color: #4a5568;
+  margin: 0;
+}
+
+.app__meta {
+  background: #f8fafc;
+  border: 1px solid #dbe4ee;
+  border-radius: 10px;
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 1.25rem;
+  padding: 1rem;
+}
+
+.app__actions {
+  margin-top: 1.25rem;
+}
+
+.app__button {
+  background: #1d4ed8;
+  border: 1px solid #1d4ed8;
+  border-radius: 8px;
+  color: #fff;
+  cursor: pointer;
+  font-size: 0.95rem;
+  font-weight: 600;
+  padding: 0.65rem 1rem;
+}
+
+.app__button:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.app__panel {
+  background: #ffffff;
+  border: 1px solid #dbe4ee;
+  border-radius: 10px;
+  margin-top: 1.25rem;
+  padding: 1rem;
+}
+
+.app__panel h2 {
+  margin-top: 0;
+}
+
+.app__panel pre {
+  background: #0f172a;
+  border-radius: 8px;
+  color: #dbeafe;
+  font-size: 0.82rem;
+  margin: 0.75rem 0 0;
+  overflow-x: auto;
+  padding: 0.75rem;
+}
+
+.app__panel--error {
+  border-color: #fca5a5;
+}
