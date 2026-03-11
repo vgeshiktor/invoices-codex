@@ -19,7 +19,7 @@ Repository: vgeshiktor/invoices-codex
 | 2 | PR summary follows documentation guidelines | PASS | Required sections found: problem, design, testing, rollout/risk. |
 | 3 | Commit messages follow naming convention | PASS | All commit headlines match convention. |
 | 4 | Reviewer guide exists and is actionable | PASS | Reviewer guide section found. |
-| 5 | File-level changes are scoped/aligned | PASS | Changed files: 10. Top files: apps/workers-py/migrations/versions/20260311_0003_provider_configs.py (+65/-0);apps/workers-py/src/invplatform/saas/api.py (+130/-1);apps/workers-py/src/invplatform/saas/db.py (+2/-0);apps/workers-py/src/invplatform/saas/models.py (+34/-0);apps/workers-py/src/invplatform/saas/service.py (+250/-0);docs/contracts/PROVIDER_WEEK3_CONTRACT.md (+110/-0);tests/test_saas_api.py (+80/-0);tests/test_saas_openapi_export.py (+1/-0);tests/test_saas_service.py (+94/-1);tests/test_saas_tenant_guard.py (+38/-1) |
+| 5 | File-level changes are scoped/aligned | PASS | Changed files: 11. Top files: apps/workers-py/migrations/versions/20260311_0003_provider_configs.py (+65/-0);apps/workers-py/src/invplatform/saas/api.py (+130/-1);apps/workers-py/src/invplatform/saas/db.py (+2/-0);apps/workers-py/src/invplatform/saas/models.py (+34/-0);apps/workers-py/src/invplatform/saas/service.py (+250/-0);docs/contracts/PROVIDER_WEEK3_CONTRACT.md (+110/-0);docs/qa/PR_53_VALIDATION_REPORT.md (+85/-0);tests/test_saas_api.py (+80/-0);tests/test_saas_openapi_export.py (+1/-0);tests/test_saas_service.py (+94/-1);tests/test_saas_tenant_guard.py (+38/-1) |
 | 6 | Linked issues are correct | PASS | No unexpected linked issues. |
 | 7 | Linked issues are complete | PASS | All expected issues are linked. |
 | 8 | Sourcery review findings resolved | N/A | No Sourcery review threads found. |
@@ -27,7 +27,7 @@ Repository: vgeshiktor/invoices-codex
 | 10 | PR summary lists resolved issues with closing keywords | PASS | All linked issues are listed with closing keywords in PR body. |
 | 11 | Closing keyword exists in PR body or commits | PASS | Closing keyword reference found in PR body/commits. |
 | 12 | Cross-repo issues use full form when needed | N/A | No cross-repo linked issues. |
-| 13 | All checks are green | FAIL | Failing/non-success checks: Sourcery review: IN_PROGRESS/ |
+| 13 | All checks are green | FAIL | Failing/non-success checks: build-test: IN_PROGRESS/;build-test: IN_PROGRESS/ |
 | 14 | No conflicts with base branch | FAIL | mergeable=MERGEABLE, mergeStateStatus=UNSTABLE |
 
 ## B) PR Body Content Requirements
@@ -71,8 +71,8 @@ Repository: vgeshiktor/invoices-codex
 
 ## F) CI and Mergeability
 
-- Status checks: 3
-- Checks gate: FAIL (Failing/non-success checks: Sourcery review: IN_PROGRESS/)
+- Status checks: 2
+- Checks gate: FAIL (Failing/non-success checks: build-test: IN_PROGRESS/;build-test: IN_PROGRESS/)
 - Mergeability gate: FAIL (mergeable=MERGEABLE, mergeStateStatus=UNSTABLE)
 
 ## G) Final Verdict
