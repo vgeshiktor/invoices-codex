@@ -270,8 +270,10 @@ def test_openapi_exposes_api_key_security_scheme(tmp_path: Path) -> None:
         == "X-Control-Plane-Key"
     )
     assert "/v1/invoices" in body["paths"]
+    assert "/v1/providers" in body["paths"]
     assert "/v1/control-plane/tenants" in body["paths"]
     assert body["paths"]["/v1/files"]["post"]["security"] == [{"ApiKeyAuth": []}]
+    assert body["paths"]["/v1/providers"]["get"]["security"] == [{"ApiKeyAuth": []}]
     assert body["paths"]["/v1/control-plane/tenants"]["get"]["security"] == [
         {"ControlPlaneKeyAuth": []}
     ]
@@ -308,6 +310,84 @@ def test_admin_api_key_management_and_dashboard_summary(tmp_path: Path) -> None:
     assert "totals" in body
     assert "parse_jobs_by_status" in body
     assert "reports_by_status" in body
+
+
+def test_provider_crud_and_tenant_isolation(tmp_path: Path) -> None:
+    client, api_key, tenant_id = _client(tmp_path)
+    app = cast(Any, client.app)
+    _other_tenant, other_key = app.state.service.bootstrap_tenant("Other Tenant")
+
+    created = client.post(
+        "/v1/providers",
+        headers={"X-API-Key": api_key, "X-Actor": "owner"},
+        json={
+            "provider_type": "gmail",
+            "display_name": "Ops Gmail",
+            "connection_status": "disconnected",
+            "config": {"sync_window_days": 30},
+        },
+    )
+    assert created.status_code == 201
+    provider = created.json()
+    provider_id = provider["id"]
+    assert provider["provider_type"] == "gmail"
+    assert provider["tenant_id"] == tenant_id
+
+    duplicate = client.post(
+        "/v1/providers",
+        headers={"X-API-Key": api_key},
+        json={"provider_type": "gmail"},
+    )
+    assert duplicate.status_code == 409
+
+    listed = client.get(
+        "/v1/providers?limit=10&offset=0", headers={"X-API-Key": api_key}
+    )
+    assert listed.status_code == 200
+    listed_body = listed.json()
+    assert listed_body["total"] == 1
+    assert listed_body["items"][0]["id"] == provider_id
+
+    other_listed = client.get("/v1/providers", headers={"X-API-Key": other_key})
+    assert other_listed.status_code == 200
+    assert other_listed.json()["total"] == 0
+
+    updated = client.patch(
+        f"/v1/providers/{provider_id}",
+        headers={"X-API-Key": api_key},
+        json={
+            "connection_status": "connected",
+            "token_expires_at": "2030-01-01T00:00:00+00:00",
+            "last_error_code": None,
+            "last_error_message": None,
+        },
+    )
+    assert updated.status_code == 200
+    updated_body = updated.json()
+    assert updated_body["connection_status"] == "connected"
+    assert updated_body["token_expires_at"].startswith("2030-01-01T00:00:00")
+    assert updated_body["last_error_code"] is None
+
+    denied_update = client.patch(
+        f"/v1/providers/{provider_id}",
+        headers={"X-API-Key": other_key},
+        json={"connection_status": "error"},
+    )
+    assert denied_update.status_code == 404
+
+    denied_delete = client.delete(
+        f"/v1/providers/{provider_id}", headers={"X-API-Key": other_key}
+    )
+    assert denied_delete.status_code == 404
+
+    deleted = client.delete(
+        f"/v1/providers/{provider_id}", headers={"X-API-Key": api_key}
+    )
+    assert deleted.status_code == 204
+
+    after_delete = client.get("/v1/providers", headers={"X-API-Key": api_key})
+    assert after_delete.status_code == 200
+    assert after_delete.json()["total"] == 0
 
 
 def test_control_plane_tenant_bootstrap_and_listing(tmp_path: Path) -> None:

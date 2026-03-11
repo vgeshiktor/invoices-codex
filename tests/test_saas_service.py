@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 import re
 
@@ -7,7 +8,14 @@ import pytest
 from sqlalchemy import select
 
 from invplatform.saas.db import build_engine, build_session_factory
-from invplatform.saas.models import Base, IdempotencyRecord, ParseJob, Report
+from invplatform.saas.models import (
+    AuditEvent,
+    Base,
+    IdempotencyRecord,
+    ParseJob,
+    ProviderConfig,
+    Report,
+)
 from invplatform.saas.queue import InMemoryJobQueue
 from invplatform.saas.service import PARSE_JOB_TASK, SaaSService
 
@@ -75,6 +83,91 @@ def test_create_tenant_user_existing_user_requires_password_match(
             password="wrong-pass",
             role="viewer",
         )
+
+
+def test_provider_config_crud_and_tenant_isolation(tmp_path: Path) -> None:
+    service, _queue = _build_service(tmp_path)
+    tenant_a, _ = service.bootstrap_tenant("Tenant A")
+    tenant_b, _ = service.bootstrap_tenant("Tenant B")
+
+    created = service.create_provider_config(
+        tenant_a.id,
+        provider_type="GMAIL",
+        display_name=" Ops Gmail ",
+        config={"sync_window_days": 30},
+        actor="ops-a",
+    )
+    assert created.provider_type == "gmail"
+    assert created.display_name == "Ops Gmail"
+
+    items_a, total_a = service.list_provider_configs(tenant_a.id)
+    assert total_a == 1
+    assert items_a[0].id == created.id
+    assert items_a[0].provider_type == "gmail"
+
+    items_b, total_b = service.list_provider_configs(tenant_b.id)
+    assert total_b == 0
+    assert items_b == []
+
+    with pytest.raises(ValueError, match="already exists"):
+        service.create_provider_config(tenant_a.id, provider_type="gmail")
+
+    second_tenant_item = service.create_provider_config(
+        tenant_b.id, provider_type="gmail"
+    )
+    assert second_tenant_item.id != created.id
+
+    updated = service.update_provider_config(
+        tenant_a.id,
+        created.id,
+        updates={
+            "connection_status": "connected",
+            "token_expires_at": datetime.now(timezone.utc),
+            "last_error_code": None,
+            "last_error_message": None,
+        },
+        actor="ops-a",
+    )
+    assert updated.connection_status == "connected"
+    assert updated.token_expires_at is not None
+
+    with pytest.raises(ValueError, match="provider config not found"):
+        service.update_provider_config(
+            tenant_b.id, created.id, updates={"connection_status": "error"}
+        )
+
+    service.delete_provider_config(tenant_a.id, created.id, actor="ops-a")
+    items_after_delete, total_after_delete = service.list_provider_configs(tenant_a.id)
+    assert total_after_delete == 0
+    assert items_after_delete == []
+
+    with service.session_factory() as session:
+        session.info["tenant_id"] = tenant_a.id
+        events = list(
+            session.execute(
+                select(AuditEvent).where(
+                    AuditEvent.tenant_id == tenant_a.id,
+                    AuditEvent.event_type.in_(
+                        {"provider.create", "provider.update", "provider.delete"}
+                    ),
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert [event.event_type for event in events] == [
+            "provider.create",
+            "provider.update",
+            "provider.delete",
+        ]
+        rows = list(
+            session.execute(
+                select(ProviderConfig).where(ProviderConfig.tenant_id == tenant_a.id)
+            )
+            .scalars()
+            .all()
+        )
+        assert rows == []
 
 
 def test_register_file_and_create_parse_job_enqueues_task(tmp_path: Path) -> None:
