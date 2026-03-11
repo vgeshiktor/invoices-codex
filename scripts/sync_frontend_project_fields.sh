@@ -180,20 +180,41 @@ FIELDS_JSON="$(gh project field-list "$PROJECT_NUMBER" --owner "$PROJECT_OWNER" 
 
 get_field_id() {
   local field_name="$1"
-  jq -r --arg n "$field_name" '[.[] | select(.name == $n)][0].id // empty' <<<"$FIELDS_JSON"
+  jq -r --arg n "$field_name" '
+    def norm_fields:
+      if type == "array" then .
+      elif type == "object" then (.fields // .items // [])
+      else []
+      end;
+    [norm_fields[] | select((.name // "") == $n)][0].id // empty
+  ' <<<"$FIELDS_JSON"
 }
 
 create_single_select_field() {
   local field_name="$1"
   local options_csv="$2"
-  run_or_echo gh project field-create "$PROJECT_NUMBER" \
-    --owner "$PROJECT_OWNER" \
-    --name "$field_name" \
-    --data-type SINGLE_SELECT \
-    --single-select-options "$options_csv" >/dev/null
-  if [[ "$DRY_RUN" -ne 1 ]]; then
-    FIELDS_JSON="$(gh project field-list "$PROJECT_NUMBER" --owner "$PROJECT_OWNER" -L 200 --format json)"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    run_or_echo gh project field-create "$PROJECT_NUMBER" \
+      --owner "$PROJECT_OWNER" \
+      --name "$field_name" \
+      --data-type SINGLE_SELECT \
+      --single-select-options "$options_csv"
+    return 0
   fi
+
+  if ! out="$(gh project field-create "$PROJECT_NUMBER" \
+      --owner "$PROJECT_OWNER" \
+      --name "$field_name" \
+      --data-type SINGLE_SELECT \
+      --single-select-options "$options_csv" 2>&1)"; then
+    if grep -qi "Name has already been taken" <<<"$out"; then
+      :
+    else
+      echo "$out" >&2
+      return 1
+    fi
+  fi
+  FIELDS_JSON="$(gh project field-list "$PROJECT_NUMBER" --owner "$PROJECT_OWNER" -L 200 --format json)"
 }
 
 ensure_single_select_field() {
@@ -223,7 +244,12 @@ get_option_id() {
   local field_name="$1"
   local option_name="$2"
   jq -r --arg f "$field_name" --arg o "$option_name" '
-    .[] | select(.name == $f) | (.options // [])[] | select(.name == $o) | .id
+    def norm_fields:
+      if type == "array" then .
+      elif type == "object" then (.fields // .items // [])
+      else []
+      end;
+    norm_fields[] | select((.name // "") == $f) | (.options // [])[] | select((.name // "") == $o) | .id
   ' <<<"$FIELDS_JSON" | head -n1
 }
 
@@ -304,7 +330,16 @@ while IFS=$'\t' read -r issue_id issue_title issue_week; do
     continue
   fi
 
-  issue_row="$(jq -r --arg t "$issue_title" '.[] | select(.title == $t) | [.number, .url] | @tsv' <<<"$ISSUES_JSON" | head -n1)"
+  # Resolve issue in repo:
+  # 1) exact title match (preferred)
+  # 2) fallback to issue-id token in title, e.g. "[FE-701]"
+  issue_row="$(jq -r --arg t "$issue_title" --arg id_token "[$issue_id]" '
+    (
+      [.[] | select(.title == $t)][0]
+      // [.[] | select((.title // "") | contains($id_token))][0]
+    ) as $m
+    | if $m == null then empty else [$m.number, $m.url] | @tsv end
+  ' <<<"$ISSUES_JSON" | head -n1)"
   if [[ -z "$issue_row" ]]; then
     echo "  - missing issue in repo (title mismatch): $issue_title"
     MISSING=$((MISSING + 1))
@@ -360,7 +395,12 @@ echo
 echo "Updating project fields (Status/Owner/Week)..."
 while IFS=$'\t' read -r issue_id issue_title issue_week owner_value issue_number issue_url; do
   item_id="$(jq -r --arg url "$issue_url" '
-    .[] | select((.content.url // "") == $url) | .id
+    def norm_items:
+      if type == "array" then .
+      elif type == "object" then (.items // [])
+      else []
+      end;
+    norm_items[] | select((.content.url // "") == $url) | .id
   ' <<<"$ITEMS_JSON" | head -n1)"
   if [[ -z "$item_id" ]]; then
     echo "  - skip (item not found in project): #$issue_number $issue_id"
