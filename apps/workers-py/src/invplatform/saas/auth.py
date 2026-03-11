@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from collections.abc import Callable
 import hashlib
 import hmac
 import json
@@ -13,6 +14,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .models import ApiKey
+
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_TENANT_SLUG_RE = re.compile(r"^[a-z0-9-]{2,64}$")
 
 
 def hash_api_key(raw_key: str) -> str:
@@ -55,6 +59,26 @@ def slugify_tenant_name(raw_name: str) -> str:
     if not value:
         return "tenant"
     return value[:64]
+
+
+def is_valid_email(raw_email: str) -> bool:
+    return bool(_EMAIL_RE.match(raw_email.strip()))
+
+
+def is_valid_tenant_slug(raw_slug: str) -> bool:
+    return bool(_TENANT_SLUG_RE.match(raw_slug.strip().lower()))
+
+
+def unique_tenant_slug(name: str, slug_exists: Callable[[str], bool]) -> str:
+    base_slug = slugify_tenant_name(name)
+    candidate = base_slug
+    suffix = 1
+    while slug_exists(candidate):
+        suffix_text = f"-{suffix}"
+        trim_to = max(1, 64 - len(suffix_text))
+        candidate = f"{base_slug[:trim_to]}{suffix_text}"
+        suffix += 1
+    return candidate
 
 
 def hash_password(password: str, iterations: int = 120_000) -> str:

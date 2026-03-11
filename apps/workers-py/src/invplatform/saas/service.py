@@ -5,7 +5,7 @@ import json
 from datetime import date
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
-from typing import cast
+from typing import NoReturn, cast
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -80,7 +80,7 @@ class ServiceConfig:
     parse_job_task_name: str = PARSE_JOB_TASK
     report_job_task_name: str = REPORT_JOB_TASK
     report_cleanup_task_name: str = REPORT_CLEANUP_TASK
-    auth_access_token_secret: str = "dev-auth-secret"
+    auth_access_token_secret: str | None = None
     auth_access_token_ttl_seconds: int = 900
     auth_refresh_token_ttl_seconds: int = 30 * 24 * 60 * 60
 
@@ -138,16 +138,15 @@ class SaaSService:
         ).scalar_one_or_none()
 
     def _next_unique_tenant_slug(self, session: Session, name: str) -> str:
-        base_slug = auth.slugify_tenant_name(name)
-        candidate = base_slug
-        suffix = 1
-        while (
-            session.execute(select(Tenant.id).where(Tenant.slug == candidate)).scalar_one_or_none()
-            is not None
-        ):
-            candidate = f"{base_slug}-{suffix}"
-            suffix += 1
-        return candidate
+        return auth.unique_tenant_slug(
+            name,
+            lambda candidate: (
+                session.execute(
+                    select(Tenant.id).where(Tenant.slug == candidate)
+                ).scalar_one_or_none()
+                is not None
+            ),
+        )
 
     def _issue_access_token(
         self,
@@ -158,6 +157,8 @@ class SaaSService:
         session_id: str,
         expires_at: datetime,
     ) -> str:
+        if not self.config.auth_access_token_secret:
+            raise RuntimeError("auth access token secret is not configured")
         return auth.issue_access_token(
             secret=self.config.auth_access_token_secret,
             user_id=user_id,
@@ -166,6 +167,56 @@ class SaaSService:
             session_id=session_id,
             expires_at=expires_at,
         )
+
+    def _auth_fail(
+        self,
+        session: Session,
+        *,
+        tenant_id: str,
+        event_type: str,
+        error_code: str,
+        message: str,
+        status_code: int,
+        request_id: str | None = None,
+        user_id: str | None = None,
+        session_id: str | None = None,
+        reason_code: str | None = None,
+    ) -> NoReturn:
+        self._emit_auth_event(
+            session,
+            tenant_id=tenant_id,
+            event_type=event_type,
+            request_id=request_id,
+            user_id=user_id,
+            session_id=session_id,
+            status_code=status_code,
+            reason_code=reason_code,
+        )
+        session.commit()
+        raise AuthError(code=error_code, message=message, status_code=status_code)
+
+    def _get_active_principals(
+        self,
+        session: Session,
+        *,
+        tenant_id: str,
+        user_id: str,
+        membership_id: str,
+    ) -> tuple[User, TenantMembership, Tenant] | None:
+        user = session.execute(select(User).where(User.id == user_id)).scalar_one_or_none()
+        membership = session.execute(
+            select(TenantMembership).where(TenantMembership.id == membership_id)
+        ).scalar_one_or_none()
+        tenant = session.execute(select(Tenant).where(Tenant.id == tenant_id)).scalar_one_or_none()
+        if (
+            user is None
+            or membership is None
+            or tenant is None
+            or not user.is_active
+            or membership.status != "active"
+        ):
+            return None
+        return user, membership, tenant
 
     def _emit_auth_event(
         self,
@@ -237,6 +288,8 @@ class SaaSService:
                 )
                 session.add(user)
                 session.flush()
+            elif not auth.verify_password(password, user.password_hash):
+                raise ValueError("password does not match existing user")
 
             membership = session.execute(
                 select(TenantMembership).where(
@@ -280,6 +333,18 @@ class SaaSService:
                 message="email, password, and tenant_slug are required.",
                 status_code=400,
             )
+        if not auth.is_valid_email(normalized_email):
+            raise AuthError(
+                code="VALIDATION_ERROR",
+                message="email format is invalid.",
+                status_code=400,
+            )
+        if not auth.is_valid_tenant_slug(normalized_slug):
+            raise AuthError(
+                code="VALIDATION_ERROR",
+                message="tenant_slug format is invalid.",
+                status_code=400,
+            )
 
         now = _utcnow()
         access_expires_at = now + timedelta(seconds=self.config.auth_access_token_ttl_seconds)
@@ -300,15 +365,16 @@ class SaaSService:
                 or not auth.verify_password(password, user.password_hash)
             ):
                 if tenant is not None:
-                    self._emit_auth_event(
+                    self._auth_fail(
                         session,
                         tenant_id=tenant.id,
                         event_type="auth.login.failed",
-                        request_id=request_id,
+                        error_code="AUTH_INVALID_CREDENTIALS",
+                        message="Email or password is incorrect.",
                         status_code=401,
+                        request_id=request_id,
                         reason_code="AUTH_INVALID_CREDENTIALS",
                     )
-                    session.commit()
                 raise AuthError(
                     code="AUTH_INVALID_CREDENTIALS",
                     message="Email or password is incorrect.",
@@ -322,20 +388,16 @@ class SaaSService:
                 )
             ).scalar_one_or_none()
             if membership is None or membership.status != "active" or not user.is_active:
-                self._emit_auth_event(
+                self._auth_fail(
                     session,
                     tenant_id=tenant.id,
                     event_type="auth.login.failed",
-                    request_id=request_id,
-                    user_id=user.id,
-                    status_code=403,
-                    reason_code="AUTH_MEMBERSHIP_INACTIVE",
-                )
-                session.commit()
-                raise AuthError(
-                    code="AUTH_MEMBERSHIP_INACTIVE",
+                    error_code="AUTH_MEMBERSHIP_INACTIVE",
                     message="User membership is inactive for this tenant.",
                     status_code=403,
+                    request_id=request_id,
+                    user_id=user.id,
+                    reason_code="AUTH_MEMBERSHIP_INACTIVE",
                 )
 
             refresh_token = auth.generate_refresh_token()
@@ -410,74 +472,54 @@ class SaaSService:
                     status_code=401,
                 )
             if existing.revoked_at is not None:
-                self._emit_auth_event(
+                self._auth_fail(
                     session,
                     tenant_id=existing.tenant_id,
                     event_type="auth.refresh.failed",
+                    error_code="AUTH_SESSION_REVOKED",
+                    message="Session has been revoked.",
+                    status_code=401,
                     request_id=request_id,
                     user_id=existing.user_id,
                     session_id=existing.id,
-                    status_code=401,
                     reason_code="AUTH_SESSION_REVOKED",
-                )
-                session.commit()
-                raise AuthError(
-                    code="AUTH_SESSION_REVOKED",
-                    message="Session has been revoked.",
-                    status_code=401,
                 )
             if _coerce_utc(existing.refresh_expires_at) <= now:
-                self._emit_auth_event(
+                self._auth_fail(
                     session,
                     tenant_id=existing.tenant_id,
                     event_type="auth.refresh.failed",
-                    request_id=request_id,
-                    user_id=existing.user_id,
-                    session_id=existing.id,
-                    status_code=401,
-                    reason_code="AUTH_SESSION_EXPIRED",
-                )
-                session.commit()
-                raise AuthError(
-                    code="AUTH_SESSION_EXPIRED",
+                    error_code="AUTH_SESSION_EXPIRED",
                     message="Session refresh window has expired.",
                     status_code=401,
-                )
-
-            user = session.execute(
-                select(User).where(User.id == existing.user_id)
-            ).scalar_one_or_none()
-            membership = session.execute(
-                select(TenantMembership).where(TenantMembership.id == existing.membership_id)
-            ).scalar_one_or_none()
-            tenant = session.execute(
-                select(Tenant).where(Tenant.id == existing.tenant_id)
-            ).scalar_one_or_none()
-            if (
-                user is None
-                or membership is None
-                or tenant is None
-                or not user.is_active
-                or membership.status != "active"
-            ):
-                existing.revoked_at = now
-                existing.revoke_reason = "inactive_membership"
-                self._emit_auth_event(
-                    session,
-                    tenant_id=existing.tenant_id,
-                    event_type="auth.refresh.failed",
                     request_id=request_id,
                     user_id=existing.user_id,
                     session_id=existing.id,
-                    status_code=401,
-                    reason_code="AUTH_SESSION_REVOKED",
+                    reason_code="AUTH_SESSION_EXPIRED",
                 )
-                session.commit()
-                raise AuthError(
-                    code="AUTH_SESSION_REVOKED",
+
+            principals = self._get_active_principals(
+                session,
+                tenant_id=existing.tenant_id,
+                user_id=existing.user_id,
+                membership_id=existing.membership_id,
+            )
+            if principals is None:
+                existing.revoked_at = now
+                existing.revoke_reason = "inactive_membership"
+                self._auth_fail(
+                    session,
+                    tenant_id=existing.tenant_id,
+                    event_type="auth.refresh.failed",
+                    error_code="AUTH_SESSION_REVOKED",
                     message="Session has been revoked.",
                     status_code=401,
+                    request_id=request_id,
+                    user_id=existing.user_id,
+                    session_id=existing.id,
+                    reason_code="AUTH_SESSION_REVOKED",
                 )
+            user, membership, tenant = principals
 
             new_refresh_token = auth.generate_refresh_token()
             access_expires_at = now + timedelta(seconds=self.config.auth_access_token_ttl_seconds)
@@ -544,6 +586,8 @@ class SaaSService:
             session.commit()
 
     def get_current_user(self, *, access_token: str) -> AuthMeResult:
+        if not self.config.auth_access_token_secret:
+            raise RuntimeError("auth access token secret is not configured")
         claims, token_error = auth.decode_access_token(
             access_token, secret=self.config.auth_access_token_secret
         )
@@ -581,27 +625,19 @@ class SaaSService:
                     message="Access token is invalid.",
                     status_code=401,
                 )
-            user = session.execute(
-                select(User).where(User.id == claims.user_id)
-            ).scalar_one_or_none()
-            membership = session.execute(
-                select(TenantMembership).where(TenantMembership.id == claims.membership_id)
-            ).scalar_one_or_none()
-            tenant = session.execute(
-                select(Tenant).where(Tenant.id == claims.tenant_id)
-            ).scalar_one_or_none()
-            if (
-                user is None
-                or membership is None
-                or tenant is None
-                or not user.is_active
-                or membership.status != "active"
-            ):
+            principals = self._get_active_principals(
+                session,
+                tenant_id=claims.tenant_id,
+                user_id=claims.user_id,
+                membership_id=claims.membership_id,
+            )
+            if principals is None:
                 raise AuthError(
                     code="AUTH_ACCESS_INVALID",
                     message="Access token is invalid.",
                     status_code=401,
                 )
+            user, membership, tenant = principals
             return AuthMeResult(
                 user=user,
                 tenant=tenant,

@@ -33,6 +33,16 @@ def parse_args() -> argparse.Namespace:
         default=os.environ.get("SAAS_CONTROL_PLANE_API_KEY"),
         help="Optional control-plane key for tenant bootstrap/list endpoints.",
     )
+    parser.add_argument(
+        "--auth-access-token-secret",
+        default=os.environ.get("SAAS_AUTH_ACCESS_TOKEN_SECRET"),
+        help="Required auth access-token signing secret.",
+    )
+    parser.add_argument(
+        "--allow-insecure-auth-cookie",
+        action="store_true",
+        help="Allow non-secure auth cookie (development only).",
+    )
     parser.add_argument("--host", default="127.0.0.1", help="Host to bind (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=8080, help="Port to bind (default: 8080)")
     return parser.parse_args()
@@ -43,6 +53,9 @@ def main() -> None:
     storage_url = args.storage_url
     if args.upload_dir:
         storage_url = f"local://{args.upload_dir}"
+    auth_secret = (args.auth_access_token_secret or "").strip()
+    if not auth_secret:
+        raise RuntimeError("Missing auth secret. Set --auth-access-token-secret.")
 
     app = create_app(
         ApiAppConfig(
@@ -50,6 +63,8 @@ def main() -> None:
             redis_url=args.redis_url,
             storage_url=storage_url,
             control_plane_api_key=args.control_plane_api_key,
+            auth_access_token_secret=auth_secret,
+            auth_cookie_secure=not args.allow_insecure_auth_cookie,
         )
     )
 

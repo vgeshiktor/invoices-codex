@@ -21,10 +21,10 @@ class ApiAppConfig:
     redis_url: str | None = None
     storage_url: str = "local://./data/saas_storage"
     control_plane_api_key: str | None = None
-    auth_access_token_secret: str = "dev-auth-secret"
+    auth_access_token_secret: str | None = None
     auth_access_token_ttl_seconds: int = 900
     auth_refresh_token_ttl_seconds: int = 30 * 24 * 60 * 60
-    auth_cookie_secure: bool = False
+    auth_cookie_secure: bool = True
 
 
 def _normalize_action(method: str, route_path: str) -> str:
@@ -168,6 +168,8 @@ def create_app(config: ApiAppConfig | None = None):
         ) from exc
 
     cfg = config or ApiAppConfig()
+    if not cfg.auth_access_token_secret:
+        raise RuntimeError("auth_access_token_secret must be configured.")
     service = _build_service(cfg)
     storage = build_storage(cfg.storage_url)
     metrics = MetricsRegistry()

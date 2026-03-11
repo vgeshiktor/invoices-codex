@@ -7,24 +7,18 @@ Create Date: 2026-03-11
 
 from __future__ import annotations
 
-import re
 from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+
+from invplatform.saas.auth import unique_tenant_slug
 
 # revision identifiers, used by Alembic.
 revision: str = "20260311_0002"
 down_revision: Union[str, None] = "20260308_0001"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
-
-
-def _slugify(name: str) -> str:
-    value = re.sub(r"[^a-z0-9]+", "-", (name or "").strip().lower()).strip("-")
-    if not value:
-        return "tenant"
-    return value[:64]
 
 
 def upgrade() -> None:
@@ -34,12 +28,7 @@ def upgrade() -> None:
     rows = list(bind.execute(sa.text("select id, name from saas_tenants")).mappings())
     used: set[str] = set()
     for row in rows:
-        base = _slugify(str(row["name"] or ""))
-        candidate = base
-        suffix = 1
-        while candidate in used:
-            candidate = f"{base}-{suffix}"
-            suffix += 1
+        candidate = unique_tenant_slug(str(row["name"] or ""), lambda slug: slug in used)
         used.add(candidate)
         bind.execute(
             sa.text("update saas_tenants set slug = :slug where id = :tenant_id"),

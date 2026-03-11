@@ -2,6 +2,7 @@ from __future__ import annotations
 # ruff: noqa: E402
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, cast
 
@@ -17,8 +18,9 @@ except ModuleNotFoundError:
 
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
+from invplatform.saas import auth as saas_auth
 from invplatform.saas.api import ApiAppConfig, create_app
-from invplatform.saas.models import AuditEvent, InvoiceRecord, Tenant
+from invplatform.saas.models import AuditEvent, AuthSession, InvoiceRecord, Tenant
 
 
 def _client(
@@ -31,6 +33,8 @@ def _client(
             database_url=f"sqlite:///{tmp_path / 'saas-api.db'}",
             storage_url=f"local://{tmp_path / 'storage'}",
             control_plane_api_key=control_plane_api_key,
+            auth_access_token_secret="test-auth-secret",
+            auth_cookie_secure=False,
         )
     )
     tenant, api_key = app.state.service.bootstrap_tenant("API Tenant")
@@ -426,3 +430,114 @@ def test_auth_login_invalid_credentials_returns_envelope(tmp_path: Path) -> None
     body = login.json()
     assert body["error"]["code"] == "AUTH_INVALID_CREDENTIALS"
     assert body["error"]["request_id"]
+
+
+def test_auth_refresh_missing_cookie_returns_envelope(tmp_path: Path) -> None:
+    client, _api_key, _tenant_id = _client(tmp_path)
+    response = client.post("/auth/refresh")
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "AUTH_REFRESH_MISSING"
+
+
+def test_auth_refresh_invalid_cookie_returns_envelope(tmp_path: Path) -> None:
+    client, _api_key, _tenant_id = _client(tmp_path)
+    response = client.post(
+        "/auth/refresh", cookies={"inv_refresh": "invalid-refresh-token"}
+    )
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "AUTH_REFRESH_INVALID"
+
+
+def test_auth_refresh_expired_session_returns_envelope(tmp_path: Path) -> None:
+    client, _api_key, tenant_id = _client(tmp_path)
+    app = cast(Any, client.app)
+    app.state.service.create_tenant_user(
+        tenant_id=tenant_id,
+        email="ops-expired@example.test",
+        password="secret-123",
+        role="admin",
+    )
+    with app.state.service.session_factory() as session:
+        session.info["disable_tenant_guard"] = True
+        tenant = session.execute(
+            select(Tenant).where(Tenant.id == tenant_id)
+        ).scalar_one()
+
+    login = client.post(
+        "/auth/login",
+        json={
+            "email": "ops-expired@example.test",
+            "password": "secret-123",
+            "tenant_slug": tenant.slug,
+        },
+    )
+    assert login.status_code == 200
+    refresh_cookie = login.cookies.get("inv_refresh")
+    assert refresh_cookie
+
+    with app.state.service.session_factory() as session:
+        session.info["disable_tenant_guard"] = True
+        auth_session = session.execute(
+            select(AuthSession).where(
+                AuthSession.refresh_token_hash
+                == saas_auth.hash_refresh_token(refresh_cookie)
+            )
+        ).scalar_one()
+        auth_session.refresh_expires_at = datetime.now(timezone.utc) - timedelta(
+            seconds=1
+        )
+        session.commit()
+
+    response = client.post("/auth/refresh", cookies={"inv_refresh": refresh_cookie})
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "AUTH_SESSION_EXPIRED"
+
+
+def test_auth_me_missing_access_token_returns_envelope(tmp_path: Path) -> None:
+    client, _api_key, _tenant_id = _client(tmp_path)
+    response = client.get("/v1/me")
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "AUTH_ACCESS_MISSING"
+
+
+def test_auth_me_invalid_access_token_returns_envelope(tmp_path: Path) -> None:
+    client, _api_key, _tenant_id = _client(tmp_path)
+    response = client.get("/v1/me", headers={"Authorization": "Bearer malformed-token"})
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "AUTH_ACCESS_INVALID"
+
+
+def test_auth_login_wrong_tenant_slug_returns_invalid_credentials(
+    tmp_path: Path,
+) -> None:
+    client, _api_key, tenant_id = _client(tmp_path)
+    app = cast(Any, client.app)
+    app.state.service.create_tenant_user(
+        tenant_id=tenant_id,
+        email="ops-wrong-tenant@example.test",
+        password="secret-123",
+    )
+    response = client.post(
+        "/auth/login",
+        json={
+            "email": "ops-wrong-tenant@example.test",
+            "password": "secret-123",
+            "tenant_slug": "wrong-tenant",
+        },
+    )
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "AUTH_INVALID_CREDENTIALS"
+
+
+def test_auth_login_validation_error_returns_envelope(tmp_path: Path) -> None:
+    client, _api_key, _tenant_id = _client(tmp_path)
+    response = client.post(
+        "/auth/login",
+        json={
+            "email": "bad-email",
+            "password": "secret-123",
+            "tenant_slug": "INVALID_SLUG",
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"

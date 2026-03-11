@@ -146,6 +146,10 @@ Errors:
 - `403` `AUTH_MEMBERSHIP_INACTIVE`
 - `429` `AUTH_RATE_LIMITED`
 
+Implementation note (current backend status):
+
+- `AUTH_RATE_LIMITED` is reserved by contract but not yet enforced in the current Day 1 backend implementation.
+
 ### `POST /auth/refresh`
 
 Rotate refresh token and return a new access token for the same `session_id`.
