@@ -3,7 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 import json
 from datetime import date
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
 from typing import cast
 
@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from . import auth
 from .models import (
     ApiKey,
+    AuthSession,
     AuditEvent,
     FileStatus,
     IdempotencyRecord,
@@ -25,6 +26,8 @@ from .models import (
     ReportArtifact,
     ReportParseJob,
     Tenant,
+    TenantMembership,
+    User,
 )
 from .queue import JobQueue
 from .repository import TenantScopedRepository
@@ -39,11 +42,47 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _coerce_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+@dataclass(frozen=True)
+class AuthSessionResult:
+    access_token: str
+    refresh_token: str
+    expires_in: int
+    user: User
+    tenant: Tenant
+    membership: TenantMembership
+    session: AuthSession
+
+
+@dataclass(frozen=True)
+class AuthMeResult:
+    user: User
+    tenant: Tenant
+    membership: TenantMembership
+    session: AuthSession
+
+
+class AuthError(RuntimeError):
+    def __init__(self, *, code: str, message: str, status_code: int = 401):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.status_code = status_code
+
+
 @dataclass
 class ServiceConfig:
     parse_job_task_name: str = PARSE_JOB_TASK
     report_job_task_name: str = REPORT_JOB_TASK
     report_cleanup_task_name: str = REPORT_CLEANUP_TASK
+    auth_access_token_secret: str = "dev-auth-secret"
+    auth_access_token_ttl_seconds: int = 900
+    auth_refresh_token_ttl_seconds: int = 30 * 24 * 60 * 60
 
 
 @dataclass
@@ -98,10 +137,483 @@ class SaaSService:
             select(Report).where(Report.tenant_id == tenant_id, Report.id == record.resource_id)
         ).scalar_one_or_none()
 
+    def _next_unique_tenant_slug(self, session: Session, name: str) -> str:
+        base_slug = auth.slugify_tenant_name(name)
+        candidate = base_slug
+        suffix = 1
+        while (
+            session.execute(select(Tenant.id).where(Tenant.slug == candidate)).scalar_one_or_none()
+            is not None
+        ):
+            candidate = f"{base_slug}-{suffix}"
+            suffix += 1
+        return candidate
+
+    def _issue_access_token(
+        self,
+        *,
+        user_id: str,
+        tenant_id: str,
+        membership_id: str,
+        session_id: str,
+        expires_at: datetime,
+    ) -> str:
+        return auth.issue_access_token(
+            secret=self.config.auth_access_token_secret,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            membership_id=membership_id,
+            session_id=session_id,
+            expires_at=expires_at,
+        )
+
+    def _emit_auth_event(
+        self,
+        session: Session,
+        *,
+        tenant_id: str,
+        event_type: str,
+        request_id: str | None = None,
+        user_id: str | None = None,
+        session_id: str | None = None,
+        status_code: int | None = None,
+        reason_code: str | None = None,
+    ) -> None:
+        payload: dict[str, object] = {}
+        if request_id is not None:
+            payload["request_id"] = request_id
+        if user_id is not None:
+            payload["user_id"] = user_id
+        if session_id is not None:
+            payload["session_id"] = session_id
+        if status_code is not None:
+            payload["status_code"] = status_code
+        if reason_code is not None:
+            payload["reason_code"] = reason_code
+        session.add(
+            AuditEvent(
+                tenant_id=tenant_id,
+                event_type=event_type,
+                actor=user_id,
+                payload_json=json.dumps(payload),
+            )
+        )
+
+    def create_tenant_user(
+        self,
+        *,
+        tenant_id: str,
+        email: str,
+        password: str,
+        full_name: str | None = None,
+        role: str = "admin",
+        status: str = "active",
+    ) -> tuple[User, TenantMembership]:
+        normalized_email = email.strip().lower()
+        if not normalized_email:
+            raise ValueError("email is required")
+        if not password:
+            raise ValueError("password is required")
+        if status not in {"active", "disabled", "invited"}:
+            raise ValueError("invalid membership status")
+        with self.session_factory() as session:
+            session.info["disable_tenant_guard"] = True
+            tenant = session.execute(
+                select(Tenant).where(Tenant.id == tenant_id)
+            ).scalar_one_or_none()
+            if tenant is None:
+                raise ValueError("tenant not found")
+
+            user = session.execute(
+                select(User).where(User.email_normalized == normalized_email)
+            ).scalar_one_or_none()
+            if user is None:
+                user = User(
+                    email=email.strip(),
+                    email_normalized=normalized_email,
+                    password_hash=auth.hash_password(password),
+                    full_name=(full_name or "").strip() or None,
+                    is_active=True,
+                )
+                session.add(user)
+                session.flush()
+
+            membership = session.execute(
+                select(TenantMembership).where(
+                    TenantMembership.tenant_id == tenant_id,
+                    TenantMembership.user_id == user.id,
+                )
+            ).scalar_one_or_none()
+            if membership is None:
+                membership = TenantMembership(
+                    tenant_id=tenant_id,
+                    user_id=user.id,
+                    role=role,
+                    status=status,
+                )
+                session.add(membership)
+            else:
+                membership.role = role
+                membership.status = status
+                membership.updated_at = _utcnow()
+
+            session.commit()
+            session.refresh(user)
+            session.refresh(membership)
+            return user, membership
+
+    def authenticate_user(
+        self,
+        *,
+        tenant_slug: str,
+        email: str,
+        password: str,
+        request_id: str | None = None,
+        remote_ip: str | None = None,
+        user_agent: str | None = None,
+    ) -> AuthSessionResult:
+        normalized_email = email.strip().lower()
+        normalized_slug = tenant_slug.strip().lower()
+        if not normalized_email or not password or not normalized_slug:
+            raise AuthError(
+                code="VALIDATION_ERROR",
+                message="email, password, and tenant_slug are required.",
+                status_code=400,
+            )
+
+        now = _utcnow()
+        access_expires_at = now + timedelta(seconds=self.config.auth_access_token_ttl_seconds)
+        refresh_expires_at = now + timedelta(seconds=self.config.auth_refresh_token_ttl_seconds)
+
+        with self.session_factory() as session:
+            session.info["disable_tenant_guard"] = True
+
+            tenant = session.execute(
+                select(Tenant).where(Tenant.slug == normalized_slug)
+            ).scalar_one_or_none()
+            user = session.execute(
+                select(User).where(User.email_normalized == normalized_email)
+            ).scalar_one_or_none()
+            if (
+                tenant is None
+                or user is None
+                or not auth.verify_password(password, user.password_hash)
+            ):
+                if tenant is not None:
+                    self._emit_auth_event(
+                        session,
+                        tenant_id=tenant.id,
+                        event_type="auth.login.failed",
+                        request_id=request_id,
+                        status_code=401,
+                        reason_code="AUTH_INVALID_CREDENTIALS",
+                    )
+                    session.commit()
+                raise AuthError(
+                    code="AUTH_INVALID_CREDENTIALS",
+                    message="Email or password is incorrect.",
+                    status_code=401,
+                )
+
+            membership = session.execute(
+                select(TenantMembership).where(
+                    TenantMembership.tenant_id == tenant.id,
+                    TenantMembership.user_id == user.id,
+                )
+            ).scalar_one_or_none()
+            if membership is None or membership.status != "active" or not user.is_active:
+                self._emit_auth_event(
+                    session,
+                    tenant_id=tenant.id,
+                    event_type="auth.login.failed",
+                    request_id=request_id,
+                    user_id=user.id,
+                    status_code=403,
+                    reason_code="AUTH_MEMBERSHIP_INACTIVE",
+                )
+                session.commit()
+                raise AuthError(
+                    code="AUTH_MEMBERSHIP_INACTIVE",
+                    message="User membership is inactive for this tenant.",
+                    status_code=403,
+                )
+
+            refresh_token = auth.generate_refresh_token()
+            auth_session = AuthSession(
+                tenant_id=tenant.id,
+                user_id=user.id,
+                membership_id=membership.id,
+                refresh_token_hash=auth.hash_refresh_token(refresh_token),
+                access_expires_at=access_expires_at,
+                refresh_expires_at=refresh_expires_at,
+                created_ip=remote_ip,
+                created_user_agent=(user_agent or "")[:512] or None,
+            )
+            session.add(auth_session)
+            user.last_login_at = now
+            session.flush()
+
+            self._emit_auth_event(
+                session,
+                tenant_id=tenant.id,
+                event_type="auth.login.succeeded",
+                request_id=request_id,
+                user_id=user.id,
+                session_id=auth_session.id,
+                status_code=200,
+            )
+            session.commit()
+            session.refresh(auth_session)
+            session.refresh(user)
+            session.refresh(membership)
+            session.refresh(tenant)
+
+            access_token = self._issue_access_token(
+                user_id=user.id,
+                tenant_id=tenant.id,
+                membership_id=membership.id,
+                session_id=auth_session.id,
+                expires_at=access_expires_at,
+            )
+            return AuthSessionResult(
+                access_token=access_token,
+                refresh_token=refresh_token,
+                expires_in=self.config.auth_access_token_ttl_seconds,
+                user=user,
+                tenant=tenant,
+                membership=membership,
+                session=auth_session,
+            )
+
+    def refresh_session(
+        self, *, refresh_token: str, request_id: str | None = None
+    ) -> AuthSessionResult:
+        if not refresh_token:
+            raise AuthError(
+                code="AUTH_REFRESH_MISSING",
+                message="Refresh token is required.",
+                status_code=401,
+            )
+        now = _utcnow()
+        with self.session_factory() as session:
+            session.info["disable_tenant_guard"] = True
+
+            existing = session.execute(
+                select(AuthSession).where(
+                    AuthSession.refresh_token_hash == auth.hash_refresh_token(refresh_token)
+                )
+            ).scalar_one_or_none()
+            if existing is None:
+                raise AuthError(
+                    code="AUTH_REFRESH_INVALID",
+                    message="Refresh token is invalid.",
+                    status_code=401,
+                )
+            if existing.revoked_at is not None:
+                self._emit_auth_event(
+                    session,
+                    tenant_id=existing.tenant_id,
+                    event_type="auth.refresh.failed",
+                    request_id=request_id,
+                    user_id=existing.user_id,
+                    session_id=existing.id,
+                    status_code=401,
+                    reason_code="AUTH_SESSION_REVOKED",
+                )
+                session.commit()
+                raise AuthError(
+                    code="AUTH_SESSION_REVOKED",
+                    message="Session has been revoked.",
+                    status_code=401,
+                )
+            if _coerce_utc(existing.refresh_expires_at) <= now:
+                self._emit_auth_event(
+                    session,
+                    tenant_id=existing.tenant_id,
+                    event_type="auth.refresh.failed",
+                    request_id=request_id,
+                    user_id=existing.user_id,
+                    session_id=existing.id,
+                    status_code=401,
+                    reason_code="AUTH_SESSION_EXPIRED",
+                )
+                session.commit()
+                raise AuthError(
+                    code="AUTH_SESSION_EXPIRED",
+                    message="Session refresh window has expired.",
+                    status_code=401,
+                )
+
+            user = session.execute(
+                select(User).where(User.id == existing.user_id)
+            ).scalar_one_or_none()
+            membership = session.execute(
+                select(TenantMembership).where(TenantMembership.id == existing.membership_id)
+            ).scalar_one_or_none()
+            tenant = session.execute(
+                select(Tenant).where(Tenant.id == existing.tenant_id)
+            ).scalar_one_or_none()
+            if (
+                user is None
+                or membership is None
+                or tenant is None
+                or not user.is_active
+                or membership.status != "active"
+            ):
+                existing.revoked_at = now
+                existing.revoke_reason = "inactive_membership"
+                self._emit_auth_event(
+                    session,
+                    tenant_id=existing.tenant_id,
+                    event_type="auth.refresh.failed",
+                    request_id=request_id,
+                    user_id=existing.user_id,
+                    session_id=existing.id,
+                    status_code=401,
+                    reason_code="AUTH_SESSION_REVOKED",
+                )
+                session.commit()
+                raise AuthError(
+                    code="AUTH_SESSION_REVOKED",
+                    message="Session has been revoked.",
+                    status_code=401,
+                )
+
+            new_refresh_token = auth.generate_refresh_token()
+            access_expires_at = now + timedelta(seconds=self.config.auth_access_token_ttl_seconds)
+            existing.refresh_token_hash = auth.hash_refresh_token(new_refresh_token)
+            existing.access_expires_at = access_expires_at
+            existing.last_seen_at = now
+            existing.updated_at = now
+
+            self._emit_auth_event(
+                session,
+                tenant_id=existing.tenant_id,
+                event_type="auth.refresh.succeeded",
+                request_id=request_id,
+                user_id=existing.user_id,
+                session_id=existing.id,
+                status_code=200,
+            )
+            session.commit()
+            session.refresh(existing)
+
+            access_token = self._issue_access_token(
+                user_id=existing.user_id,
+                tenant_id=existing.tenant_id,
+                membership_id=existing.membership_id,
+                session_id=existing.id,
+                expires_at=access_expires_at,
+            )
+            return AuthSessionResult(
+                access_token=access_token,
+                refresh_token=new_refresh_token,
+                expires_in=self.config.auth_access_token_ttl_seconds,
+                user=user,
+                tenant=tenant,
+                membership=membership,
+                session=existing,
+            )
+
+    def revoke_session(self, *, refresh_token: str | None, request_id: str | None = None) -> None:
+        if not refresh_token:
+            return
+        now = _utcnow()
+        with self.session_factory() as session:
+            session.info["disable_tenant_guard"] = True
+            existing = session.execute(
+                select(AuthSession).where(
+                    AuthSession.refresh_token_hash == auth.hash_refresh_token(refresh_token)
+                )
+            ).scalar_one_or_none()
+            if existing is None:
+                return
+            if existing.revoked_at is None:
+                existing.revoked_at = now
+                existing.revoke_reason = "logout"
+                existing.updated_at = now
+            self._emit_auth_event(
+                session,
+                tenant_id=existing.tenant_id,
+                event_type="auth.logout.succeeded",
+                request_id=request_id,
+                user_id=existing.user_id,
+                session_id=existing.id,
+                status_code=204,
+            )
+            session.commit()
+
+    def get_current_user(self, *, access_token: str) -> AuthMeResult:
+        claims, token_error = auth.decode_access_token(
+            access_token, secret=self.config.auth_access_token_secret
+        )
+        if token_error == "missing":
+            raise AuthError(
+                code="AUTH_ACCESS_MISSING",
+                message="Access token is missing.",
+                status_code=401,
+            )
+        if token_error == "expired":
+            raise AuthError(
+                code="AUTH_ACCESS_EXPIRED",
+                message="Access token has expired.",
+                status_code=401,
+            )
+        if claims is None:
+            raise AuthError(
+                code="AUTH_ACCESS_INVALID",
+                message="Access token is invalid.",
+                status_code=401,
+            )
+
+        with self.session_factory() as session:
+            session.info["disable_tenant_guard"] = True
+            auth_session = session.execute(
+                select(AuthSession).where(
+                    AuthSession.id == claims.session_id,
+                    AuthSession.tenant_id == claims.tenant_id,
+                    AuthSession.user_id == claims.user_id,
+                )
+            ).scalar_one_or_none()
+            if auth_session is None or auth_session.revoked_at is not None:
+                raise AuthError(
+                    code="AUTH_ACCESS_INVALID",
+                    message="Access token is invalid.",
+                    status_code=401,
+                )
+            user = session.execute(
+                select(User).where(User.id == claims.user_id)
+            ).scalar_one_or_none()
+            membership = session.execute(
+                select(TenantMembership).where(TenantMembership.id == claims.membership_id)
+            ).scalar_one_or_none()
+            tenant = session.execute(
+                select(Tenant).where(Tenant.id == claims.tenant_id)
+            ).scalar_one_or_none()
+            if (
+                user is None
+                or membership is None
+                or tenant is None
+                or not user.is_active
+                or membership.status != "active"
+            ):
+                raise AuthError(
+                    code="AUTH_ACCESS_INVALID",
+                    message="Access token is invalid.",
+                    status_code=401,
+                )
+            return AuthMeResult(
+                user=user,
+                tenant=tenant,
+                membership=membership,
+                session=auth_session,
+            )
+
     def bootstrap_tenant(self, name: str, actor: str | None = None) -> tuple[Tenant, str]:
         api_key_material = auth.generate_api_key()
         with self.session_factory() as session:
-            tenant = Tenant(name=name)
+            session.info["disable_tenant_guard"] = True
+            tenant = Tenant(name=name, slug=self._next_unique_tenant_slug(session, name))
             session.add(tenant)
             session.flush()
 

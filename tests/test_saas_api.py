@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from sqlalchemy import select
 
 fastapi = pytest.importorskip("fastapi")
 pytest.importorskip("httpx")
@@ -14,7 +15,7 @@ pytest.importorskip("python_multipart")
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
 from invplatform.saas.api import ApiAppConfig, create_app
-from invplatform.saas.models import AuditEvent, InvoiceRecord
+from invplatform.saas.models import AuditEvent, InvoiceRecord, Tenant
 
 
 def _client(
@@ -338,3 +339,87 @@ def test_control_plane_key_enforcement(tmp_path: Path) -> None:
     disabled_client, _api_key_disabled, _tenant_id_disabled = _client(tmp_path)
     disabled = disabled_client.get("/v1/control-plane/tenants")
     assert disabled.status_code == 503
+
+
+def test_auth_login_me_refresh_logout_flow(tmp_path: Path) -> None:
+    client, _api_key, tenant_id = _client(tmp_path)
+    app = cast(Any, client.app)
+    app.state.service.create_tenant_user(
+        tenant_id=tenant_id,
+        email="ops@example.test",
+        password="secret-123",
+        full_name="Ops User",
+        role="admin",
+    )
+    with app.state.service.session_factory() as session:
+        session.info["disable_tenant_guard"] = True
+        tenant = session.execute(
+            select(Tenant).where(Tenant.id == tenant_id)
+        ).scalar_one()
+
+    login = client.post(
+        "/auth/login",
+        json={
+            "email": "ops@example.test",
+            "password": "secret-123",
+            "tenant_slug": tenant.slug,
+        },
+    )
+    assert login.status_code == 200
+    assert login.headers.get("x-request-id")
+    login_body = login.json()
+    access_token = login_body["access_token"]
+    assert access_token
+    assert login_body["user"]["email"] == "ops@example.test"
+    assert login_body["tenant"]["slug"] == tenant.slug
+    assert login.cookies.get("inv_refresh")
+
+    me = client.get("/v1/me", headers={"Authorization": f"Bearer {access_token}"})
+    assert me.status_code == 200
+    assert me.json()["tenant"]["id"] == tenant_id
+    assert me.json()["user"]["role"] == "admin"
+
+    refreshed = client.post("/auth/refresh")
+    assert refreshed.status_code == 200
+    refreshed_token = refreshed.json()["access_token"]
+    assert refreshed_token and refreshed_token != access_token
+
+    logout = client.post("/auth/logout")
+    assert logout.status_code == 204
+    logout_again = client.post("/auth/logout")
+    assert logout_again.status_code == 204
+
+    denied = client.get(
+        "/v1/me", headers={"Authorization": f"Bearer {refreshed_token}"}
+    )
+    assert denied.status_code == 401
+    assert denied.json()["error"]["code"] == "AUTH_ACCESS_INVALID"
+
+
+def test_auth_login_invalid_credentials_returns_envelope(tmp_path: Path) -> None:
+    client, _api_key, tenant_id = _client(tmp_path)
+    app = cast(Any, client.app)
+    app.state.service.create_tenant_user(
+        tenant_id=tenant_id,
+        email="ops2@example.test",
+        password="secret-123",
+    )
+    with app.state.service.session_factory() as session:
+        session.info["disable_tenant_guard"] = True
+        tenant = session.execute(
+            select(Tenant).where(Tenant.id == tenant_id)
+        ).scalar_one()
+
+    login = client.post(
+        "/auth/login",
+        json={
+            "email": "ops2@example.test",
+            "password": "bad-password",
+            "tenant_slug": tenant.slug,
+        },
+    )
+    assert login.status_code == 401
+    assert login.headers.get("x-request-id")
+    body = login.json()
+    assert body["error"]["code"] == "AUTH_INVALID_CREDENTIALS"
+    assert body["error"]["request_id"]

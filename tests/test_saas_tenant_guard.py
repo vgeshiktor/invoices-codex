@@ -15,8 +15,8 @@ def test_tenant_guard_blocks_tenantless_scoped_select(tmp_path: Path) -> None:
     session_factory = build_session_factory(engine, enforce_tenant_guard=True)
 
     with session_factory() as session:
-        t1 = Tenant(name="A")
-        t2 = Tenant(name="B")
+        t1 = Tenant(name="A", slug="a")
+        t2 = Tenant(name="B", slug="b")
         session.add(t1)
         session.add(t2)
         session.flush()
@@ -59,8 +59,8 @@ def test_tenant_guard_auto_filters_by_session_tenant(tmp_path: Path) -> None:
     session_factory = build_session_factory(engine, enforce_tenant_guard=True)
 
     with session_factory() as session:
-        t1 = Tenant(name="A")
-        t2 = Tenant(name="B")
+        t1 = Tenant(name="A", slug="a")
+        t2 = Tenant(name="B", slug="b")
         session.add(t1)
         session.add(t2)
         session.flush()
