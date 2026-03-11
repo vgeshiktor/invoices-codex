@@ -54,6 +54,7 @@ Default field values at import:
 - `BE-102`
 - `BE-202`
 - `BE-302`
+- `BE-402`
 
 `Orion`:
 - `FE-001`

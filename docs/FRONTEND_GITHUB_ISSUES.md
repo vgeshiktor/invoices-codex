@@ -300,6 +300,14 @@ Acceptance Criteria: support bundle export includes relevant request IDs and sta
 
 ## E8 Quality, Accessibility, and Release
 
+### BE-402
+Title: `[BE-402] Centralize workers-py test import path setup in shared conftest`
+Labels: `backend`, `epic:E8`, `type:chore`, `priority:P2`
+Milestone: `Week 10`
+Depends on: `none`
+Acceptance Criteria: test bootstrap path setup is centralized; duplicated per-file `sys.path` setup is removed from touched suites; coverage gate remains green.
+GitHub Issue: `#51` (`https://github.com/vgeshiktor/invoices-codex/issues/51`)
+
 ### FE-701
 Title: `[FE-701] Enforce frontend testing pyramid in CI`
 Labels: `frontend`, `epic:E8`, `type:chore`, `priority:P1`
