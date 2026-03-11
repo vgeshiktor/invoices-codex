@@ -145,3 +145,13 @@ At week close, produce:
 1. PR list for FE-001..FE-007.
 2. CI run link proving required checks.
 3. Short retro: what slowed us, what to fix before Week 2.
+
+## 9. Day 0 Inputs (FE1)
+
+Use these Day 0 specs as implementation input for Week 1:
+
+- `docs/frontend/FE_WEEK1_BOOTSTRAP_CHECKLIST.md`
+- `docs/frontend/FE_APP_SHELL_ACCEPTANCE.md`
+
+Operational constraint reminder:
+- Day 0 produced planning/spec artifacts only; implementation starts on Week 1 Day 1.

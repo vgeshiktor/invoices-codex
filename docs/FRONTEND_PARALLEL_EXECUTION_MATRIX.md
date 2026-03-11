@@ -158,3 +158,11 @@ A week is done only when:
 2. required CI checks are green,
 3. no open P0/P1 defects in that week scope,
 4. handoff note for next week is published.
+
+## 5. Day 0 Artifacts (Prepared)
+
+### Orion (FE1)
+
+- Bootstrap checklist: `docs/frontend/FE_WEEK1_BOOTSTRAP_CHECKLIST.md`
+- App-shell acceptance criteria: `docs/frontend/FE_APP_SHELL_ACCEPTANCE.md`
+- Scope constraint honored: Day 0 prep/spec only; no `apps/web` scaffolding executed.
