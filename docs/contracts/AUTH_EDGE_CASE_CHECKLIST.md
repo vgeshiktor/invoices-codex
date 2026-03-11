@@ -3,6 +3,12 @@
 Date: 2026-03-11
 Scope: `BE-001` runtime expectations for `/auth/login`, `/auth/refresh`, `/auth/logout`, `/v1/me`
 
+Canonical reference for contract values:
+
+- Error codes and status mapping: `AUTH_RUNTIME_INTEGRATION_NOTES.md` section `3`.
+- Auth audit event taxonomy and payload keys: `AUTH_RUNTIME_INTEGRATION_NOTES.md` section `5.1`.
+- If this checklist conflicts with the integration notes, the integration notes are canonical.
+
 ## 1. Expired/Invalid Session
 
 - [ ] `GET /v1/me` with expired session returns `401`.
@@ -64,6 +70,10 @@ Required auth audit payload keys (minimum):
 - [ ] `subject_id` (nullable for anonymous failures)
 - [ ] `reason_code` (required on failures)
 
+Clarification:
+- Use `subject_type=anonymous` for requests where no valid principal is established
+  (for example `AUTH_REQUIRED` or invalid login attempts before user resolution).
+
 ## 6. Verification Matrix (Minimum Tests)
 
 - [ ] Unit:
@@ -105,6 +115,7 @@ Required auth audit payload keys (minimum):
 | `AUTH-EC-06` | Session/API-key tenant mismatch | protected `/v1/*` | `403` | `TENANT_MISMATCH` | `auth.access_denied` |
 | `AUTH-EC-07` | Revoked API key access | protected `/v1/*` | `401` | `CREDENTIAL_REVOKED` | `auth.access_denied` |
 | `AUTH-EC-08` | Revoked session access | protected `/v1/*` | `401` | `CREDENTIAL_REVOKED` | `auth.access_denied` |
+| `AUTH-EC-09` | Missing credentials on protected route | protected `/v1/*` | `401` | `AUTH_REQUIRED` | `auth.access_denied` |
 
 ## 10. Ownership Split (Day 1 Preparation)
 
