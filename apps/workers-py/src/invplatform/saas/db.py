@@ -16,6 +16,7 @@ class TenantGuardError(RuntimeError):
 @lru_cache(maxsize=1)
 def _tenant_scoped_models() -> tuple[type[object], ...]:
     from .models import (
+        AuthSession,
         AuditEvent,
         IdempotencyRecord,
         InvoiceFile,
@@ -23,6 +24,7 @@ def _tenant_scoped_models() -> tuple[type[object], ...]:
         ParseJob,
         Report,
         ReportArtifact,
+        TenantMembership,
     )
 
     return (
@@ -33,6 +35,8 @@ def _tenant_scoped_models() -> tuple[type[object], ...]:
         ReportArtifact,
         AuditEvent,
         IdempotencyRecord,
+        TenantMembership,
+        AuthSession,
     )
 
 

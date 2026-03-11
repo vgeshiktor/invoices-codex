@@ -29,6 +29,11 @@ def parse_args() -> argparse.Namespace:
             "integrations/openapi/saas-openapi.v<api-version>.json"
         ),
     )
+    parser.add_argument(
+        "--auth-access-token-secret",
+        default="openapi-export-secret",
+        help="Required auth secret used while bootstrapping the API app for export.",
+    )
     return parser.parse_args()
 
 
@@ -38,6 +43,8 @@ def main() -> None:
         ApiAppConfig(
             database_url=args.database_url,
             storage_url=args.storage_url,
+            auth_access_token_secret=args.auth_access_token_secret,
+            auth_cookie_secure=False,
         )
     )
     schema = app.openapi()

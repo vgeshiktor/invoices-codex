@@ -11,7 +11,7 @@ from .db import build_engine, build_session_factory
 from .metrics import MetricsRegistry
 from .models import ApiKey, Base, InvoiceRecord, ParseJob, Report, ReportArtifact, Tenant
 from .queue import build_queue
-from .service import SaaSService
+from .service import AuthError, SaaSService, ServiceConfig
 from .storage import StorageBackend, build_storage
 
 
@@ -21,6 +21,10 @@ class ApiAppConfig:
     redis_url: str | None = None
     storage_url: str = "local://./data/saas_storage"
     control_plane_api_key: str | None = None
+    auth_access_token_secret: str | None = None
+    auth_access_token_ttl_seconds: int = 900
+    auth_refresh_token_ttl_seconds: int = 30 * 24 * 60 * 60
+    auth_cookie_secure: bool = True
 
 
 def _normalize_action(method: str, route_path: str) -> str:
@@ -48,6 +52,7 @@ def _api_key_to_dict(row: ApiKey) -> dict[str, object]:
 def _tenant_to_dict(row: Tenant) -> dict[str, object]:
     return {
         "id": row.id,
+        "slug": row.slug,
         "name": row.name,
         "created_at": _iso(row.created_at),
     }
@@ -77,7 +82,12 @@ def _build_service(config: ApiAppConfig) -> SaaSService:
         engine, enforce_tenant_guard=True
     )
     queue = build_queue(config.redis_url)
-    return SaaSService(session_factory=session_factory, queue=queue)
+    service_config = ServiceConfig(
+        auth_access_token_secret=config.auth_access_token_secret,
+        auth_access_token_ttl_seconds=config.auth_access_token_ttl_seconds,
+        auth_refresh_token_ttl_seconds=config.auth_refresh_token_ttl_seconds,
+    )
+    return SaaSService(session_factory=session_factory, queue=queue, config=service_config)
 
 
 def _invoice_to_dict(row: InvoiceRecord) -> dict[str, object]:
@@ -132,6 +142,7 @@ def _report_to_dict(row: Report, artifacts: list[ReportArtifact]) -> dict[str, o
 def create_app(config: ApiAppConfig | None = None):
     try:
         from fastapi import (  # type: ignore[import-not-found]
+            Cookie,
             Depends,
             FastAPI,
             File,
@@ -139,11 +150,17 @@ def create_app(config: ApiAppConfig | None = None):
             HTTPException,
             Query,
             Request,
+            Response,
             Security,
             UploadFile,
         )
-        from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
-        from fastapi.security import APIKeyHeader
+        from fastapi.responses import (
+            HTMLResponse,
+            JSONResponse,
+            PlainTextResponse,
+            RedirectResponse,
+        )
+        from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
         from pydantic import BaseModel
     except ModuleNotFoundError as exc:  # pragma: no cover - environment dependent
         raise RuntimeError(
@@ -151,6 +168,8 @@ def create_app(config: ApiAppConfig | None = None):
         ) from exc
 
     cfg = config or ApiAppConfig()
+    if not cfg.auth_access_token_secret:
+        raise RuntimeError("auth_access_token_secret must be configured.")
     service = _build_service(cfg)
     storage = build_storage(cfg.storage_url)
     metrics = MetricsRegistry()
@@ -178,6 +197,11 @@ def create_app(config: ApiAppConfig | None = None):
     class TenantBootstrapRequest(BaseModel):
         name: str
 
+    class AuthLoginRequest(BaseModel):
+        email: str
+        password: str
+        tenant_slug: str
+
     def get_service() -> SaaSService:
         return app.state.service  # type: ignore[no-any-return]
 
@@ -191,6 +215,7 @@ def create_app(config: ApiAppConfig | None = None):
         return x_actor
 
     api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False, scheme_name="ApiKeyAuth")
+    bearer_header = HTTPBearer(auto_error=False, scheme_name="BearerAuth")
     control_plane_key_header = APIKeyHeader(
         name="X-Control-Plane-Key",
         auto_error=False,
@@ -205,6 +230,47 @@ def create_app(config: ApiAppConfig | None = None):
             raise HTTPException(status_code=503, detail="control plane is disabled")
         if x_control_plane_key != control_plane_api_key:
             raise HTTPException(status_code=401, detail="invalid control plane key")
+
+    def _auth_error_response(
+        request: Request,
+        *,
+        status_code: int,
+        code: str,
+        message: str,
+        details: dict[str, object] | None = None,
+    ) -> JSONResponse:
+        request_id = getattr(request.state, "request_id", None)
+        return JSONResponse(
+            status_code=status_code,
+            content={
+                "error": {
+                    "code": code,
+                    "message": message,
+                    "request_id": request_id,
+                    "details": details or {},
+                }
+            },
+        )
+
+    def _set_refresh_cookie(response: Response, refresh_token: str) -> None:
+        response.set_cookie(
+            key="inv_refresh",
+            value=refresh_token,
+            httponly=True,
+            secure=cfg.auth_cookie_secure,
+            samesite="lax",
+            path="/auth",
+            max_age=cfg.auth_refresh_token_ttl_seconds,
+        )
+
+    def _clear_refresh_cookie(response: Response) -> None:
+        response.delete_cookie(
+            key="inv_refresh",
+            path="/auth",
+            secure=cfg.auth_cookie_secure,
+            httponly=True,
+            samesite="lax",
+        )
 
     def get_tenant_id(
         request: Request,
@@ -311,6 +377,130 @@ def create_app(config: ApiAppConfig | None = None):
         return PlainTextResponse(
             metrics_registry.render_prometheus(), media_type="text/plain; version=0.0.4"
         )
+
+    @app.post("/auth/login")
+    def auth_login(
+        payload: AuthLoginRequest,
+        request: Request,
+        response: Response,
+        service: SaaSService = Depends(get_service),
+    ):
+        try:
+            auth_result = service.authenticate_user(
+                tenant_slug=payload.tenant_slug,
+                email=payload.email,
+                password=payload.password,
+                request_id=getattr(request.state, "request_id", None),
+                remote_ip=request.client.host if request.client else None,
+                user_agent=request.headers.get("User-Agent"),
+            )
+        except AuthError as exc:
+            return _auth_error_response(
+                request,
+                status_code=exc.status_code,
+                code=exc.code,
+                message=exc.message,
+            )
+
+        _set_refresh_cookie(response, auth_result.refresh_token)
+        return {
+            "access_token": auth_result.access_token,
+            "token_type": "Bearer",
+            "expires_in": auth_result.expires_in,
+            "user": {
+                "id": auth_result.user.id,
+                "email": auth_result.user.email,
+                "full_name": auth_result.user.full_name,
+                "role": auth_result.membership.role,
+                "status": "active" if auth_result.user.is_active else "disabled",
+            },
+            "tenant": _tenant_to_dict(auth_result.tenant),
+            "session": {
+                "session_id": auth_result.session.id,
+                "access_expires_at": _iso(auth_result.session.access_expires_at),
+                "refresh_expires_at": _iso(auth_result.session.refresh_expires_at),
+            },
+        }
+
+    @app.post("/auth/refresh")
+    def auth_refresh(
+        request: Request,
+        response: Response,
+        refresh_token: str | None = Cookie(default=None, alias="inv_refresh"),
+        service: SaaSService = Depends(get_service),
+    ):
+        try:
+            auth_result = service.refresh_session(
+                refresh_token=refresh_token or "",
+                request_id=getattr(request.state, "request_id", None),
+            )
+        except AuthError as exc:
+            return _auth_error_response(
+                request,
+                status_code=exc.status_code,
+                code=exc.code,
+                message=exc.message,
+            )
+
+        _set_refresh_cookie(response, auth_result.refresh_token)
+        return {
+            "access_token": auth_result.access_token,
+            "token_type": "Bearer",
+            "expires_in": auth_result.expires_in,
+            "session": {
+                "session_id": auth_result.session.id,
+                "access_expires_at": _iso(auth_result.session.access_expires_at),
+                "refresh_expires_at": _iso(auth_result.session.refresh_expires_at),
+            },
+        }
+
+    @app.post("/auth/logout", status_code=204)
+    def auth_logout(
+        request: Request,
+        response: Response,
+        refresh_token: str | None = Cookie(default=None, alias="inv_refresh"),
+        service: SaaSService = Depends(get_service),
+    ) -> Response:
+        service.revoke_session(
+            refresh_token=refresh_token,
+            request_id=getattr(request.state, "request_id", None),
+        )
+        _clear_refresh_cookie(response)
+        response.status_code = 204
+        return response
+
+    @app.get("/v1/me")
+    def get_me(
+        request: Request,
+        credentials: HTTPAuthorizationCredentials | None = Security(bearer_header),
+        service: SaaSService = Depends(get_service),
+    ):
+        access_token = credentials.credentials if credentials else ""
+        try:
+            auth_result = service.get_current_user(access_token=access_token)
+        except AuthError as exc:
+            return _auth_error_response(
+                request,
+                status_code=exc.status_code,
+                code=exc.code,
+                message=exc.message,
+            )
+
+        return {
+            "user": {
+                "id": auth_result.user.id,
+                "email": auth_result.user.email,
+                "full_name": auth_result.user.full_name,
+                "role": auth_result.membership.role,
+                "status": "active" if auth_result.user.is_active else "disabled",
+            },
+            "tenant": _tenant_to_dict(auth_result.tenant),
+            "session": {
+                "session_id": auth_result.session.id,
+                "access_expires_at": _iso(auth_result.session.access_expires_at),
+                "refresh_expires_at": _iso(auth_result.session.refresh_expires_at),
+            },
+        }
 
     @app.get("/dashboard", include_in_schema=False)
     def dashboard_page():

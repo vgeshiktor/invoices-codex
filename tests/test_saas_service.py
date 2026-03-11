@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
+import pytest
 from sqlalchemy import select
 
 from invplatform.saas.db import build_engine, build_session_factory
@@ -39,6 +41,40 @@ def test_list_tenants_returns_newest_first(tmp_path: Path) -> None:
     assert total >= 2
     assert items[0].id == second.id
     assert items[1].id == first.id
+
+
+def test_bootstrap_tenant_slug_is_normalized_and_unique(tmp_path: Path) -> None:
+    service, _queue = _build_service(tmp_path)
+    first, _ = service.bootstrap_tenant("Acme !!! Ltd")
+    second, _ = service.bootstrap_tenant("Acme !!! Ltd")
+
+    assert first.slug == "acme-ltd"
+    assert second.slug.startswith("acme-ltd-")
+    assert first.slug != second.slug
+    assert re.match(r"^[a-z0-9-]{2,64}$", first.slug)
+    assert re.match(r"^[a-z0-9-]{2,64}$", second.slug)
+
+
+def test_create_tenant_user_existing_user_requires_password_match(
+    tmp_path: Path,
+) -> None:
+    service, _queue = _build_service(tmp_path)
+    tenant_a, _ = service.bootstrap_tenant("Tenant A")
+    tenant_b, _ = service.bootstrap_tenant("Tenant B")
+    service.create_tenant_user(
+        tenant_id=tenant_a.id,
+        email="ops@example.test",
+        password="secret-123",
+        role="admin",
+    )
+
+    with pytest.raises(ValueError, match="password does not match existing user"):
+        service.create_tenant_user(
+            tenant_id=tenant_b.id,
+            email="ops@example.test",
+            password="wrong-pass",
+            role="viewer",
+        )
 
 
 def test_register_file_and_create_parse_job_enqueues_task(tmp_path: Path) -> None:
