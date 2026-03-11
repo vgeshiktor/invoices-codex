@@ -3,6 +3,11 @@
 Date: 2026-03-11
 Owners: BE1 (contract/API), BE2 (runtime integration)
 
+Canonical contract source:
+- Error codes and status mapping: this file, section `3`.
+- Auth audit event taxonomy and payload keys: this file, section `5.1`.
+- `AUTH_EDGE_CASE_CHECKLIST.md` is a verification artifact and must reference these canonical sections.
+
 ## 1. Current Auth-Adjacent Runtime Behavior
 
 This is the current baseline in `apps/workers-py/src/invplatform/saas`:
@@ -118,6 +123,8 @@ Notes:
 - `tenant_id` must be server-derived from validated credentials.
 - `subject_id` should not expose raw secret material (never token value).
 - `credential_status` is internal-only but useful for reason-code mapping and observability.
+- `subject_type=anonymous` is expected only when no valid principal is established
+  (for example: missing credentials, invalid login attempt before user resolution, or public endpoints).
 
 ## 3. Error Contract (Implementation-Ready)
 
@@ -149,7 +156,7 @@ Standard error payload example:
 ```json
 {
   "code": "SESSION_EXPIRED",
-  "message": "Session has expired. Please login again.",
+  "message": "Session has expired. Please log in again.",
   "request_id": "req-123"
 }
 ```
@@ -220,6 +227,24 @@ Use explicit runtime flags in `ApiAppConfig` (or env-backed equivalent):
 - `auth_mode` (`api_key_only` | `hybrid` | `session_required`, default `api_key_only`)
 - `audit_auth_failures_enabled` (default `true`)
 
+`auth_mode` credential precedence and tie-break rule (must be deterministic):
+
+1. `api_key_only`
+   - Require valid API key for protected `/v1/*`.
+   - Ignore session credentials if present.
+   - Auth context resolves as `subject_type=api_key`.
+2. `session_required`
+   - Require valid user session for protected `/v1/*`.
+   - Ignore API key credentials if present.
+   - Auth context resolves as `subject_type=user`.
+3. `hybrid`
+   - If both session and API key are present, validate both.
+   - If either credential is invalid/revoked/expired: return `401`.
+   - If both are valid but map to different tenants: return `403 TENANT_MISMATCH`.
+   - If both are valid and same tenant: session takes precedence (`subject_type=user`).
+   - If only one credential is present and valid: use that credential type.
+   - If neither credential is valid/present: return `401 AUTH_REQUIRED`.
+
 Phases:
 
 1. Phase 0: `api_key_only`
@@ -245,7 +270,7 @@ Recommended route policy for phased endpoints:
 
 ## 5. Open Decisions For Day 1 (BE1 + BE2)
 
-- Final session transport: secure httpOnly cookies vs bearer tokens (recommend cookies for web).
+- Final session transport: secure HttpOnly cookies vs bearer tokens (recommend cookies for web).
 - Session lifetime and refresh rotation policy (absolute + idle timeout values).
 - Canonical list of auth audit event names and payload keys.
 - Whether auth-failure events with unknown tenant go to global/system audit stream.
