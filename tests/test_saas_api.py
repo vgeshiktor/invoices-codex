@@ -10,7 +10,10 @@ from sqlalchemy import select
 
 fastapi = pytest.importorskip("fastapi")
 pytest.importorskip("httpx")
-pytest.importorskip("python_multipart")
+try:  # package import path differs across python-multipart versions
+    import python_multipart  # type: ignore[import-not-found]  # noqa: F401
+except ModuleNotFoundError:
+    pytest.importorskip("multipart")
 
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
