@@ -293,7 +293,8 @@ if [[ -n "$DESIGN_DOCS_RAW" ]]; then
 fi
 
 declare -a EXPECTED_ISSUES=()
-for issue_ref in "${EXPECTED_ISSUES_RAW_ARR[@]:-}"; do
+for issue_ref in "${EXPECTED_ISSUES_RAW_ARR[@]-}"; do
+  [[ -z "$issue_ref" ]] && continue
   if normalized="$(normalize_issue_ref "$issue_ref")"; then
     EXPECTED_ISSUES+=("$normalized")
   else
@@ -306,20 +307,31 @@ while IFS= read -r ref; do
   [[ -n "$ref" ]] && CLOSING_ISSUES+=("$ref")
 done < <(jq -r '.closingIssuesReferences[]? | "\(.repository.owner.login)/\(.repository.name)#\(.number)"' <<<"$PR_JSON")
 
+EXPECTED_COUNT=0
+for ref in "${EXPECTED_ISSUES[@]-}"; do
+  [[ -n "$ref" ]] && EXPECTED_COUNT=$((EXPECTED_COUNT + 1))
+done
+CLOSING_COUNT=0
+for ref in "${CLOSING_ISSUES[@]-}"; do
+  [[ -n "$ref" ]] && CLOSING_COUNT=$((CLOSING_COUNT + 1))
+done
+
 # Gate 6/7: linked issue correctness/completeness
 extra_issues=()
 missing_issues=()
-if [[ ${#EXPECTED_ISSUES[@]} -eq 0 ]]; then
+if [[ "$EXPECTED_COUNT" -eq 0 ]]; then
   set_gate 6 "N/A" "No --expected-issues provided."
   set_gate 7 "N/A" "No --expected-issues provided."
 else
-  for actual in "${CLOSING_ISSUES[@]:-}"; do
+  for actual in "${CLOSING_ISSUES[@]-}"; do
+    [[ -z "$actual" ]] && continue
     if ! array_contains "$actual" "${EXPECTED_ISSUES[@]}"; then
       extra_issues+=("$actual")
     fi
   done
-  for expected in "${EXPECTED_ISSUES[@]}"; do
-    if ! array_contains "$expected" "${CLOSING_ISSUES[@]:-}"; then
+  for expected in "${EXPECTED_ISSUES[@]-}"; do
+    [[ -z "$expected" ]] && continue
+    if ! array_contains "$expected" "${CLOSING_ISSUES[@]-}"; then
       missing_issues+=("$expected")
     fi
   done
@@ -361,11 +373,12 @@ else
 fi
 
 # Gate 10: summary includes all linked issues with closing keywords
-if [[ ${#CLOSING_ISSUES[@]} -eq 0 ]]; then
+if [[ "$CLOSING_COUNT" -eq 0 ]]; then
   set_gate 10 "FAIL" "No closing issue references found in PR metadata."
 else
   missing_kw_refs=()
-  for linked in "${CLOSING_ISSUES[@]}"; do
+  for linked in "${CLOSING_ISSUES[@]-}"; do
+    [[ -z "$linked" ]] && continue
     if ! has_kw_ref_in_text_lc "$BODY_LC" "$linked"; then
       missing_kw_refs+=("$linked")
     fi
@@ -386,7 +399,8 @@ fi
 
 # Gate 12: cross-repo full form for cross-repo linked issues
 cross_repo_refs=()
-for linked in "${CLOSING_ISSUES[@]:-}"; do
+for linked in "${CLOSING_ISSUES[@]-}"; do
+  [[ -z "$linked" ]] && continue
   if [[ "${linked%#*}" != "$TARGET_OWNER/$TARGET_REPO" ]]; then
     cross_repo_refs+=("$linked")
   fi
@@ -597,7 +611,7 @@ mkdir -p "$(dirname "$OUTPUT")"
   echo "## Inputs"
   echo "- PR Number: $PR_NUMBER"
   echo "- Base/Head: $(jq -r '.baseRefName + " <- " + .headRefName' <<<"$PR_JSON")"
-  if [[ ${#EXPECTED_ISSUES[@]} -gt 0 ]]; then
+  if [[ "$EXPECTED_COUNT" -gt 0 ]]; then
     echo "- Expected issues: $(IFS=', '; echo "${EXPECTED_ISSUES[*]}")"
   else
     echo "- Expected issues: (not provided)"
@@ -639,19 +653,21 @@ mkdir -p "$(dirname "$OUTPUT")"
   echo "## D) Linked Issue Validation"
   echo
   echo "### Expected Issues from Scope"
-  if [[ ${#EXPECTED_ISSUES[@]} -eq 0 ]]; then
+  if [[ "$EXPECTED_COUNT" -eq 0 ]]; then
     echo "- (none provided)"
   else
-    for issue in "${EXPECTED_ISSUES[@]}"; do
+    for issue in "${EXPECTED_ISSUES[@]-}"; do
+      [[ -z "$issue" ]] && continue
       echo "- $issue"
     done
   fi
   echo
   echo "### Found in PR (Closing References)"
-  if [[ ${#CLOSING_ISSUES[@]} -eq 0 ]]; then
+  if [[ "$CLOSING_COUNT" -eq 0 ]]; then
     echo "- (none)"
   else
-    for issue in "${CLOSING_ISSUES[@]}"; do
+    for issue in "${CLOSING_ISSUES[@]-}"; do
+      [[ -z "$issue" ]] && continue
       echo "- $issue"
     done
   fi
