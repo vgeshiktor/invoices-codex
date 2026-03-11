@@ -1,0 +1,96 @@
+{
+  "requirements": [
+    {
+      "source": "docs/contracts/AUTH_WEEK2_CONTRACT.md",
+      "requirement": "Implement POST /auth/login endpoint",
+      "scope": "diff",
+      "patterns": [
+        "@app.post\\(\"/auth/login\"\\)",
+        "def auth_login\\("
+      ],
+      "on_missing": "FAIL",
+      "notes": "Adjust patterns for your framework if route declaration style differs."
+    },
+    {
+      "source": "docs/contracts/AUTH_WEEK2_CONTRACT.md",
+      "requirement": "Implement POST /auth/refresh endpoint",
+      "scope": "diff",
+      "patterns": [
+        "@app.post\\(\"/auth/refresh\"\\)",
+        "def auth_refresh\\("
+      ],
+      "on_missing": "FAIL"
+    },
+    {
+      "source": "docs/contracts/AUTH_WEEK2_CONTRACT.md",
+      "requirement": "Implement POST /auth/logout endpoint",
+      "scope": "diff",
+      "patterns": [
+        "@app.post\\(\"/auth/logout\"",
+        "def auth_logout\\("
+      ],
+      "on_missing": "FAIL"
+    },
+    {
+      "source": "docs/contracts/AUTH_WEEK2_CONTRACT.md",
+      "requirement": "Implement GET /v1/me endpoint",
+      "scope": "diff",
+      "patterns": [
+        "@app.get\\(\"/v1/me\"\\)",
+        "def get_me\\("
+      ],
+      "on_missing": "FAIL"
+    },
+    {
+      "source": "docs/contracts/AUTH_WEEK2_CONTRACT.md",
+      "requirement": "Error envelope includes code/message/request_id",
+      "scope": "diff",
+      "patterns": [
+        "\"error\"",
+        "\"request_id\""
+      ],
+      "on_missing": "PARTIAL"
+    },
+    {
+      "source": "docs/contracts/AUTH_WEEK2_MIGRATION_SCOPE.md",
+      "requirement": "Add saas_users table",
+      "scope": "diff",
+      "patterns": [
+        "create_table\\(\"saas_users\"",
+        "__tablename__ = \"saas_users\""
+      ],
+      "on_missing": "FAIL"
+    },
+    {
+      "source": "docs/contracts/AUTH_WEEK2_MIGRATION_SCOPE.md",
+      "requirement": "Add saas_tenant_memberships table",
+      "scope": "diff",
+      "patterns": [
+        "create_table\\(\"saas_tenant_memberships\"",
+        "__tablename__ = \"saas_tenant_memberships\""
+      ],
+      "on_missing": "FAIL"
+    },
+    {
+      "source": "docs/contracts/AUTH_WEEK2_MIGRATION_SCOPE.md",
+      "requirement": "Add saas_auth_sessions table",
+      "scope": "diff",
+      "patterns": [
+        "create_table\\(\"saas_auth_sessions\"",
+        "__tablename__ = \"saas_auth_sessions\""
+      ],
+      "on_missing": "FAIL"
+    },
+    {
+      "source": "docs/contracts/AUTH_WEEK2_CONTRACT.md",
+      "requirement": "AUTH_RATE_LIMITED is explicitly deferred/documented",
+      "scope": "diff",
+      "patterns": [
+        "AUTH_RATE_LIMITED.*reserved",
+        "AUTH_RATE_LIMITED.*not yet enforced"
+      ],
+      "on_missing": "DEFERRED",
+      "notes": "Use DEFERRED/PARTIAL for consciously postponed contract items."
+    }
+  ]
+}
