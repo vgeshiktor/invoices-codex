@@ -23,7 +23,7 @@ export const getDashboardSummary = async (): Promise<DashboardSummaryResult> => 
     if (result.error !== undefined) {
       return {
         ok: false,
-        error: normalizeApiError(result.error, result.response),
+        error: await normalizeApiError(result.error, result.response),
       };
     }
 
@@ -34,7 +34,7 @@ export const getDashboardSummary = async (): Promise<DashboardSummaryResult> => 
   } catch (error) {
     return {
       ok: false,
-      error: normalizeApiError(error),
+      error: await normalizeApiError(error),
     };
   }
 };

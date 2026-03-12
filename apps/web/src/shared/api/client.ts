@@ -18,7 +18,62 @@ const isAbortError = (error: unknown): error is Error =>
 const isTimeoutError = (error: unknown): error is Error =>
   error instanceof Error && error.name === 'TimeoutError';
 
-const toErrorMessage = (error: unknown): string => {
+const extractMessageFromValue = (value: unknown): string | undefined => {
+  if (typeof value === 'string' && value.trim().length > 0) {
+    return value;
+  }
+
+  if (!value || typeof value !== 'object') {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+
+  if (typeof record.detail === 'string' && record.detail.trim().length > 0) {
+    return record.detail;
+  }
+
+  if (typeof record.message === 'string' && record.message.trim().length > 0) {
+    return record.message;
+  }
+
+  if (Array.isArray(record.detail)) {
+    const first = record.detail[0];
+    if (typeof first === 'string' && first.trim().length > 0) {
+      return first;
+    }
+
+    if (first && typeof first === 'object') {
+      const firstRecord = first as Record<string, unknown>;
+      if (typeof firstRecord.msg === 'string' && firstRecord.msg.trim().length > 0) {
+        return firstRecord.msg;
+      }
+    }
+  }
+
+  return undefined;
+};
+
+const readResponseErrorBody = async (response?: Response): Promise<unknown | undefined> => {
+  if (!response || response.bodyUsed) {
+    return undefined;
+  }
+
+  try {
+    const clonedResponse = response.clone();
+    const contentType = clonedResponse.headers.get('content-type') ?? '';
+    if (contentType.includes('application/json') || contentType.includes('+json')) {
+      return await clonedResponse.json();
+    }
+
+    const text = await clonedResponse.text();
+    return text.trim().length > 0 ? text : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const toErrorMessage = (error: unknown, responseBody?: unknown, response?: Response): string => {
   if (isTimeoutError(error)) {
     return error.message;
   }
@@ -27,21 +82,24 @@ const toErrorMessage = (error: unknown): string => {
     return 'Request was canceled before completion';
   }
 
+  const messageFromErrorValue = extractMessageFromValue(error);
+  if (messageFromErrorValue) {
+    return messageFromErrorValue;
+  }
+
+  const messageFromResponseBody = extractMessageFromValue(responseBody);
+  if (messageFromResponseBody) {
+    return messageFromResponseBody;
+  }
+
   if (error instanceof Error && error.message.trim().length > 0) {
     return error.message;
   }
-  if (typeof error === 'string' && error.trim().length > 0) {
-    return error;
+
+  if (response?.status) {
+    return `Request failed with HTTP ${response.status}`;
   }
-  if (error && typeof error === 'object') {
-    const fromRecord = error as Record<string, unknown>;
-    if (typeof fromRecord.detail === 'string' && fromRecord.detail.trim().length > 0) {
-      return fromRecord.detail;
-    }
-    if (typeof fromRecord.message === 'string' && fromRecord.message.trim().length > 0) {
-      return fromRecord.message;
-    }
-  }
+
   return 'Unexpected API error';
 };
 
@@ -104,11 +162,15 @@ generatedClient.setConfig({
 
 export const apiClient = generatedClient;
 
-export const normalizeApiError = (error: unknown, response?: Response): ApiError => ({
-  cause: error,
-  message: toErrorMessage(error),
-  requestId: getRequestId(response),
-  status: response?.status,
-});
+export const normalizeApiError = async (error: unknown, response?: Response): Promise<ApiError> => {
+  const responseBody = await readResponseErrorBody(response);
+
+  return {
+    cause: error,
+    message: toErrorMessage(error, responseBody, response),
+    requestId: getRequestId(response),
+    status: response?.status,
+  };
+};
 
 export const getApiRequestId = getRequestId;

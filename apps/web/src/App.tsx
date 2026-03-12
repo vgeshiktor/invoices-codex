@@ -3,6 +3,7 @@ import { getDashboardSummary } from './features/dashboard/api/getDashboardSummar
 import { normalizeApiError, type ApiError } from './shared/api/client';
 import type { DashboardSummaryV1DashboardSummaryGetResponse } from './shared/api/generated';
 import { frontendEnv } from './shared/config/env';
+import { safeJsonStringify } from './shared/utils/serialization';
 import './App.css';
 
 type ScreenState =
@@ -14,45 +15,9 @@ type ScreenState =
     }
   | { mode: 'error'; error: ApiError };
 
-const toJson = (value: unknown): string => {
-  try {
-    const includeStack = frontendEnv.appEnv !== 'production';
-    const seen = new WeakSet<object>();
-    const json = JSON.stringify(
-      value,
-      (key, currentValue: unknown) => {
-        if (key === 'stack' && !includeStack) {
-          return undefined;
-        }
-
-        if (currentValue instanceof Error) {
-          return {
-            message: currentValue.message,
-            name: currentValue.name,
-            ...(includeStack ? { stack: currentValue.stack } : {}),
-          };
-        }
-        if (typeof currentValue === 'bigint') {
-          return currentValue.toString();
-        }
-        if (currentValue && typeof currentValue === 'object') {
-          if (seen.has(currentValue)) {
-            return '[Circular]';
-          }
-          seen.add(currentValue);
-        }
-        return currentValue;
-      },
-      2,
-    );
-    return json ?? String(value);
-  } catch {
-    return String(value);
-  }
-};
-
 function App() {
   const [state, setState] = useState<ScreenState>({ mode: 'idle' });
+  const includeErrorStack = frontendEnv.appEnv !== 'production';
 
   const loadDashboardSummary = async () => {
     setState({ mode: 'loading' });
@@ -74,7 +39,7 @@ function App() {
     } catch (error) {
       setState({
         mode: 'error',
-        error: normalizeApiError(error),
+        error: await normalizeApiError(error),
       });
     }
   };
@@ -110,7 +75,7 @@ function App() {
         <section className="app__panel">
           <h2>Success</h2>
           <p>Dashboard summary fetched successfully.</p>
-          <pre>{toJson(state.data)}</pre>
+          <pre>{safeJsonStringify(state.data, { includeErrorStack })}</pre>
         </section>
       )}
 
@@ -122,7 +87,7 @@ function App() {
             {state.error.status ? `HTTP ${state.error.status}` : 'No HTTP response'}
             {state.error.requestId ? ` | request-id: ${state.error.requestId}` : ''}
           </p>
-          <pre>{toJson(state.error.cause)}</pre>
+          <pre>{safeJsonStringify(state.error.cause, { includeErrorStack })}</pre>
         </section>
       )}
     </main>
