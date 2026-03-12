@@ -1,7 +1,7 @@
 # PR Validation Report
 
-Date: 2026-03-12  
-PR: https://github.com/vgeshiktor/invoices-codex/pull/49  
+Date: 2026-03-12
+PR: https://github.com/vgeshiktor/invoices-codex/pull/49
 Repository: vgeshiktor/invoices-codex
 
 ## Inputs
