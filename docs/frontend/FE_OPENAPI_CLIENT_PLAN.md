@@ -35,7 +35,7 @@ Planned `apps/web` dev dependency:
 Run from repo root:
 
 ```bash
-cd /Users/vadimgeshiktor/repos/github.com/vgeshiktor/python-projects/invoices-codex/apps/web
+cd apps/web
 npx @hey-api/openapi-ts \
   -i ../../integrations/openapi/saas-openapi.v0.1.0.json \
   -o src/shared/api/generated \
@@ -139,7 +139,7 @@ Behavior:
 
 ## 10. Endpoint-Specific Note from Current Spec
 
-`POST /v1/files` uses binary file payload (`application/octet-stream`).
+`POST /v1/files` uses multipart file payload (`multipart/form-data`).
 
 Implementation convention:
 - Keep upload call in a dedicated adapter (`features/files/api/upload.ts`).
