@@ -3,6 +3,7 @@ import pytest
 from invplatform.usecases import report_totals as totals_uc
 from invplatform.usecases import report_vendor_strategies as vendor_uc
 
+# Parsing marker constants (semantic anchors for totals/sections).
 VAT_BEFORE_MARKER = 'מ"עמ ינפל'
 VAT_MARKER = 'מע"מ'
 TOTAL_MARKER = 'סה"כ'
@@ -12,23 +13,33 @@ STINGTV_BREAKDOWN_MARKER = "ןובשחה טוריפ"
 STINGTV_BREAKDOWN_END_MARKER = "עצבמב לולכ"
 REVERSED_DETAILS_MARKER = ":םיטרפ"
 
+# Description/statement label constants (invoice narrative sections).
 PARTNER_PERIOD_DETAILS = "פירוט חיובים וזיכויים לתקופת החשבון"
 PARTNER_ACCOUNT_CHARGES_TOTAL = 'סה"כ חיובי החשבון'
 
+# Canonical vendor/municipal labels expected from strategy normalization.
 PETAH_TIKVA_MUNICIPALITY = "עיריית פתח תקווה"
 PARTNER_VENDOR = 'חברת פרטנר תקשורת בע"מ'
 KEREN_VENDOR = "קרן-מדריכת הורים ותינוקות"
 
+# Canonical invoice-for description labels.
 ARNONA_BUSINESS = "ארנונה לעסקים"
 ARNONA_GENERIC = "ארנונה"
 
 
-def test_report_totals_normalize_parse_and_select_edge_cases():
-    assert totals_uc.normalize_amount_token(None) is None
-    assert totals_uc.normalize_amount_token("abc") is None
-    assert totals_uc.normalize_amount_token("1234.567") == "765.4321"
-    assert totals_uc.parse_number("1.2.3") is None
+@pytest.mark.parametrize("module", [totals_uc, vendor_uc], ids=["totals", "vendor"])
+def test_shared_normalize_amount_token_edge_cases(module):
+    assert module.normalize_amount_token(None) is None
+    assert module.normalize_amount_token("abc") is None
+    assert module.normalize_amount_token("1234.567") == "765.4321"
 
+
+@pytest.mark.parametrize("module", [totals_uc, vendor_uc], ids=["totals", "vendor"])
+def test_shared_parse_number_edge_cases(module):
+    assert module.parse_number("1.2.3") is None
+
+
+def test_report_totals_select_amount_edge_cases():
     # Year-like values should be ignored; low integers should fall back to first candidate.
     assert totals_uc.select_amount(["2025", "abc", "5", "9"]) == pytest.approx(5.0)
     # Invalid float tokens should be skipped while keeping valid >=10 fallback.
@@ -137,7 +148,7 @@ def test_report_totals_infer_totals_uses_marker_total_and_currency_difference():
     ₪ 1,200.00
     ₪ 1,000.00
     """
-    totals = totals_uc.infer_totals(lines, text, debug=True, label="cov")
+    totals = totals_uc.infer_totals(lines, text)
     assert totals["invoice_total"] == pytest.approx(1200.0)
     assert totals["invoice_vat"] == pytest.approx(200.0)
 
@@ -153,12 +164,18 @@ def test_report_totals_infer_totals_prefers_stingtv_breakdown_for_municipal_text
     assert totals["invoice_vat"] == pytest.approx(0.0)
 
 
-def test_vendor_strategies_normalization_and_detection_edge_cases():
-    assert vendor_uc.normalize_amount_token(None) is None
-    assert vendor_uc.normalize_amount_token("abc") is None
-    assert vendor_uc.normalize_amount_token("1234.567") == "765.4321"
-    assert vendor_uc.parse_number("1.2.3") is None
+def test_report_totals_infer_totals_municipal_without_stingtv_uses_generic_fallback():
+    lines = ["header", "footer"]
+    text = f"{MUNICIPAL_ARNONA}\n{TOTAL_MARKER} לתשלום 590.00\n₪ 590.00"
+    totals = totals_uc.infer_totals(lines, text)
+    assert totals["municipal"] is True
+    assert totals["breakdown_sum"] is None
+    assert totals["breakdown_values"] == []
+    assert totals["invoice_total"] == pytest.approx(590.0)
+    assert totals["invoice_vat"] == pytest.approx(0.0)
 
+
+def test_vendor_strategies_normalization_and_detection_edge_cases():
     assert vendor_uc.normalize_invoice_for_value("1234") is None
     assert (
         vendor_uc.normalize_invoice_for_value(f"{ARNONA_BUSINESS} נכס 7")
