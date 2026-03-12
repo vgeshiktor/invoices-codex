@@ -89,9 +89,9 @@ def _provider_to_dict(row: ProviderConfig) -> dict[str, object]:
     return {
         "id": row.id,
         "tenant_id": row.tenant_id,
-        "provider_type": row.provider_type,
+        "provider_type": row.provider_type.value,
         "display_name": row.display_name,
-        "connection_status": row.connection_status,
+        "connection_status": row.connection_status.value,
         "token_expires_at": _iso(row.token_expires_at),
         "last_successful_sync_at": _iso(row.last_successful_sync_at),
         "last_error_code": row.last_error_code,

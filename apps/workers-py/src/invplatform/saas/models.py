@@ -8,6 +8,7 @@ from sqlalchemy import (
     Boolean,
     Date,
     DateTime,
+    Enum as SqlEnum,
     Float,
     ForeignKey,
     Integer,
@@ -171,10 +172,17 @@ class ProviderConfig(Base):
     tenant_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("saas_tenants.id"), nullable=False, index=True
     )
-    provider_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    provider_type: Mapped[ProviderType] = mapped_column(
+        SqlEnum(ProviderType, native_enum=False, validate_strings=True),
+        nullable=False,
+        index=True,
+    )
     display_name: Mapped[str | None] = mapped_column(String(255))
-    connection_status: Mapped[str] = mapped_column(
-        String(32), default=ProviderConnectionStatus.DISCONNECTED.value, nullable=False, index=True
+    connection_status: Mapped[ProviderConnectionStatus] = mapped_column(
+        SqlEnum(ProviderConnectionStatus, native_enum=False, validate_strings=True),
+        default=ProviderConnectionStatus.DISCONNECTED,
+        nullable=False,
+        index=True,
     )
     token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_successful_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

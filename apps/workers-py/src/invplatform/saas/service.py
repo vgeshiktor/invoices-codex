@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from contextlib import contextmanager
 import json
 from datetime import date
@@ -39,12 +40,6 @@ PARSE_JOB_TASK = "invplatform.saas.tasks.run_parse_job_task"
 REPORT_JOB_TASK = "invplatform.saas.tasks.run_report_job_task"
 REPORT_CLEANUP_TASK = "invplatform.saas.tasks.run_report_retention_cleanup_task"
 _REPORT_ALLOWED_FORMATS = {"json", "csv", "summary_csv", "pdf"}
-_PROVIDER_ALLOWED_TYPES = {ProviderType.GMAIL.value, ProviderType.OUTLOOK.value}
-_PROVIDER_ALLOWED_CONNECTION_STATUSES = {
-    ProviderConnectionStatus.CONNECTED.value,
-    ProviderConnectionStatus.DISCONNECTED.value,
-    ProviderConnectionStatus.ERROR.value,
-}
 
 
 def _utcnow() -> datetime:
@@ -55,6 +50,60 @@ def _coerce_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def _provider_type_values() -> tuple[str, ...]:
+    return tuple(item.value for item in ProviderType)
+
+
+def _provider_status_values() -> tuple[str, ...]:
+    return tuple(item.value for item in ProviderConnectionStatus)
+
+
+def _parse_provider_type(value: object) -> ProviderType:
+    if not isinstance(value, str):
+        raise ValueError("provider_type must be a string")
+    normalized = value.strip().lower()
+    try:
+        return ProviderType(normalized)
+    except ValueError as exc:
+        allowed = ", ".join(sorted(_provider_type_values()))
+        raise ValueError(f"provider_type must be one of: {allowed}") from exc
+
+
+def _parse_connection_status(value: object) -> ProviderConnectionStatus:
+    if not isinstance(value, str):
+        raise ValueError("connection_status must be a string")
+    normalized = value.strip().lower()
+    try:
+        return ProviderConnectionStatus(normalized)
+    except ValueError as exc:
+        allowed = ", ".join(sorted(_provider_status_values()))
+        raise ValueError(f"connection_status must be one of: {allowed}") from exc
+
+
+def _normalize_optional_text(value: object, *, field_name: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} must be a string or null")
+    return value.strip() or None
+
+
+def _normalize_optional_datetime(value: object, *, field_name: str) -> datetime | None:
+    if value is None:
+        return None
+    if not isinstance(value, datetime):
+        raise ValueError(f"{field_name} must be a datetime or null")
+    return _coerce_utc(value)
+
+
+def _serialize_provider_update_value(value: object) -> object:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, (ProviderType, ProviderConnectionStatus)):
+        return value.value
+    return value
 
 
 @dataclass(frozen=True)
@@ -811,12 +860,8 @@ class SaaSService:
         display_name: str | None = None,
         actor: str | None = None,
     ) -> ProviderConfig:
-        normalized_provider_type = provider_type.strip().lower()
-        if normalized_provider_type not in _PROVIDER_ALLOWED_TYPES:
-            raise ValueError(
-                f"provider_type must be one of: {', '.join(sorted(_PROVIDER_ALLOWED_TYPES))}"
-            )
-        normalized_display_name = (display_name or "").strip() or None
+        normalized_provider_type = _parse_provider_type(provider_type)
+        normalized_display_name = _normalize_optional_text(display_name, field_name="display_name")
 
         with self.session_factory() as session:
             with self._tenant_scope(session, tenant_id):
@@ -828,14 +873,14 @@ class SaaSService:
                 ).scalar_one_or_none()
                 if existing is not None:
                     raise ValueError(
-                        f"provider {normalized_provider_type} already configured for tenant"
+                        f"provider {normalized_provider_type.value} already configured for tenant"
                     )
 
                 provider = ProviderConfig(
                     tenant_id=tenant_id,
                     provider_type=normalized_provider_type,
                     display_name=normalized_display_name,
-                    connection_status=ProviderConnectionStatus.DISCONNECTED.value,
+                    connection_status=ProviderConnectionStatus.DISCONNECTED,
                 )
                 session.add(provider)
                 session.flush()
@@ -847,8 +892,8 @@ class SaaSService:
                         payload_json=json.dumps(
                             {
                                 "provider_id": provider.id,
-                                "provider_type": provider.provider_type,
-                                "connection_status": provider.connection_status,
+                                "provider_type": provider.provider_type.value,
+                                "connection_status": provider.connection_status.value,
                             }
                         ),
                     )
@@ -865,7 +910,7 @@ class SaaSService:
                     ).scalar_one_or_none()
                     if existing is not None:
                         raise ValueError(
-                            f"provider {normalized_provider_type} already configured for tenant"
+                            f"provider {normalized_provider_type.value} already configured for tenant"
                         )
                     raise
                 session.refresh(provider)
@@ -881,15 +926,26 @@ class SaaSService:
     ) -> ProviderConfig:
         if not updates:
             raise ValueError("at least one field must be provided")
-        allowed_fields = {
-            "display_name",
-            "connection_status",
-            "token_expires_at",
-            "last_successful_sync_at",
-            "last_error_code",
-            "last_error_message",
+
+        update_normalizers: dict[str, Callable[[Any], object]] = {
+            "display_name": lambda value: _normalize_optional_text(
+                value, field_name="display_name"
+            ),
+            "connection_status": _parse_connection_status,
+            "token_expires_at": lambda value: _normalize_optional_datetime(
+                value, field_name="token_expires_at"
+            ),
+            "last_successful_sync_at": lambda value: _normalize_optional_datetime(
+                value, field_name="last_successful_sync_at"
+            ),
+            "last_error_code": lambda value: _normalize_optional_text(
+                value, field_name="last_error_code"
+            ),
+            "last_error_message": lambda value: _normalize_optional_text(
+                value, field_name="last_error_message"
+            ),
         }
-        unsupported_fields = sorted(set(updates) - allowed_fields)
+        unsupported_fields = sorted(set(updates) - set(update_normalizers))
         if unsupported_fields:
             raise ValueError(f"unsupported fields: {', '.join(unsupported_fields)}")
 
@@ -905,90 +961,19 @@ class SaaSService:
                     raise LookupError("provider not found")
 
                 payload_updates: dict[str, Any] = {}
-                if "display_name" in updates:
-                    raw_display_name = updates["display_name"]
-                    if raw_display_name is not None and not isinstance(raw_display_name, str):
-                        raise ValueError("display_name must be a string or null")
-                    provider.display_name = (
-                        raw_display_name.strip() if isinstance(raw_display_name, str) else None
-                    ) or None
-                    payload_updates["display_name"] = provider.display_name
+                for field_name, raw_value in updates.items():
+                    normalized_value = update_normalizers[field_name](raw_value)
+                    setattr(provider, field_name, normalized_value)
+                    payload_updates[field_name] = _serialize_provider_update_value(normalized_value)
 
-                if "connection_status" in updates:
-                    raw_connection_status = updates["connection_status"]
-                    if not isinstance(raw_connection_status, str):
-                        raise ValueError("connection_status must be a string")
-                    normalized_connection_status = raw_connection_status.strip().lower()
-                    if normalized_connection_status not in _PROVIDER_ALLOWED_CONNECTION_STATUSES:
-                        raise ValueError(
-                            "connection_status must be one of: "
-                            + ", ".join(sorted(_PROVIDER_ALLOWED_CONNECTION_STATUSES))
-                        )
-                    provider.connection_status = normalized_connection_status
-                    payload_updates["connection_status"] = provider.connection_status
-                    if provider.connection_status != ProviderConnectionStatus.ERROR.value:
-                        provider.last_error_code = None
-                        provider.last_error_message = None
-                        payload_updates["last_error_code"] = None
-                        payload_updates["last_error_message"] = None
-
-                if "token_expires_at" in updates:
-                    raw_token_expires_at = updates["token_expires_at"]
-                    if raw_token_expires_at is not None and not isinstance(
-                        raw_token_expires_at, datetime
-                    ):
-                        raise ValueError("token_expires_at must be a datetime or null")
-                    provider.token_expires_at = (
-                        _coerce_utc(raw_token_expires_at)
-                        if isinstance(raw_token_expires_at, datetime)
-                        else None
-                    )
-                    payload_updates["token_expires_at"] = (
-                        provider.token_expires_at.isoformat()
-                        if provider.token_expires_at is not None
-                        else None
-                    )
-
-                if "last_successful_sync_at" in updates:
-                    raw_last_successful_sync_at = updates["last_successful_sync_at"]
-                    if raw_last_successful_sync_at is not None and not isinstance(
-                        raw_last_successful_sync_at, datetime
-                    ):
-                        raise ValueError("last_successful_sync_at must be a datetime or null")
-                    provider.last_successful_sync_at = (
-                        _coerce_utc(raw_last_successful_sync_at)
-                        if isinstance(raw_last_successful_sync_at, datetime)
-                        else None
-                    )
-                    payload_updates["last_successful_sync_at"] = (
-                        provider.last_successful_sync_at.isoformat()
-                        if provider.last_successful_sync_at is not None
-                        else None
-                    )
-
-                if "last_error_code" in updates:
-                    raw_last_error_code = updates["last_error_code"]
-                    if raw_last_error_code is not None and not isinstance(raw_last_error_code, str):
-                        raise ValueError("last_error_code must be a string or null")
-                    provider.last_error_code = (
-                        raw_last_error_code.strip()
-                        if isinstance(raw_last_error_code, str)
-                        else None
-                    ) or None
-                    payload_updates["last_error_code"] = provider.last_error_code
-
-                if "last_error_message" in updates:
-                    raw_last_error_message = updates["last_error_message"]
-                    if raw_last_error_message is not None and not isinstance(
-                        raw_last_error_message, str
-                    ):
-                        raise ValueError("last_error_message must be a string or null")
-                    provider.last_error_message = (
-                        raw_last_error_message.strip()
-                        if isinstance(raw_last_error_message, str)
-                        else None
-                    ) or None
-                    payload_updates["last_error_message"] = provider.last_error_message
+                if (
+                    "connection_status" in updates
+                    and provider.connection_status != ProviderConnectionStatus.ERROR
+                ):
+                    provider.last_error_code = None
+                    provider.last_error_message = None
+                    payload_updates["last_error_code"] = None
+                    payload_updates["last_error_message"] = None
 
                 session.add(
                     AuditEvent(
@@ -1017,7 +1002,7 @@ class SaaSService:
                 ).scalar_one_or_none()
                 if provider is None:
                     raise LookupError("provider not found")
-                provider_type = provider.provider_type
+                provider_type = provider.provider_type.value
                 session.delete(provider)
                 session.add(
                     AuditEvent(

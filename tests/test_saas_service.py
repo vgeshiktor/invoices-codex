@@ -105,7 +105,7 @@ def test_provider_config_crud_is_tenant_scoped(tmp_path: Path) -> None:
     list_a = service.list_provider_configs(tenant_id=tenant_a.id)
     assert len(list_a) == 1
     assert list_a[0].id == created.id
-    assert list_a[0].provider_type == "gmail"
+    assert list_a[0].provider_type.value == "gmail"
     assert list_a[0].display_name == "Finance Gmail"
 
     updated = service.update_provider_config(
@@ -119,7 +119,7 @@ def test_provider_config_crud_is_tenant_scoped(tmp_path: Path) -> None:
         },
         actor="ops-user",
     )
-    assert updated.connection_status == "error"
+    assert updated.connection_status.value == "error"
     assert updated.last_error_code == "OAUTH_REFRESH_FAILED"
     assert updated.last_error_message == "refresh token revoked"
     assert updated.token_expires_at is not None
