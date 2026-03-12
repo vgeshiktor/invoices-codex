@@ -64,7 +64,7 @@ Command mapping:
 
 ## 6. Merge Gate Criteria (Week 1)
 
-A PR touching frontend scope (`apps/web/**`, frontend config, or shared contracts consumed by FE) can merge only when:
+A PR touching frontend scope (`apps/web/**`, frontend config, or shared contracts consumed by FE) can be merged only when:
 
 1. Existing required backend checks are green.
 2. All four frontend checks are green:
