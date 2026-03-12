@@ -1,96 +1,73 @@
 {
   "requirements": [
     {
-      "source": "docs/contracts/AUTH_WEEK2_CONTRACT.md",
-      "requirement": "Implement POST /auth/login endpoint",
+      "source": "docs/FRONTEND_GITHUB_ISSUES.md",
+      "requirement": "FE-007 adds frontend lint gate in CI",
       "scope": "diff",
       "patterns": [
-        "@app.post\\(\"/auth/login\"\\)",
-        "def auth_login\\("
-      ],
-      "on_missing": "FAIL",
-      "notes": "Adjust patterns for your framework if route declaration style differs."
-    },
-    {
-      "source": "docs/contracts/AUTH_WEEK2_CONTRACT.md",
-      "requirement": "Implement POST /auth/refresh endpoint",
-      "scope": "diff",
-      "patterns": [
-        "@app.post\\(\"/auth/refresh\"\\)",
-        "def auth_refresh\\("
+        "name: Frontend lint",
+        "npm run lint"
       ],
       "on_missing": "FAIL"
     },
     {
-      "source": "docs/contracts/AUTH_WEEK2_CONTRACT.md",
-      "requirement": "Implement POST /auth/logout endpoint",
+      "source": "docs/FRONTEND_GITHUB_ISSUES.md",
+      "requirement": "FE-007 adds frontend typecheck gate in CI",
       "scope": "diff",
       "patterns": [
-        "@app.post\\(\"/auth/logout\"",
-        "def auth_logout\\("
+        "name: Frontend typecheck",
+        "npm run typecheck"
       ],
       "on_missing": "FAIL"
     },
     {
-      "source": "docs/contracts/AUTH_WEEK2_CONTRACT.md",
-      "requirement": "Implement GET /v1/me endpoint",
+      "source": "docs/FRONTEND_GITHUB_ISSUES.md",
+      "requirement": "FE-007 adds frontend test gate in CI",
       "scope": "diff",
       "patterns": [
-        "@app.get\\(\"/v1/me\"\\)",
-        "def get_me\\("
+        "name: Frontend tests",
+        "npm run test"
       ],
       "on_missing": "FAIL"
     },
     {
-      "source": "docs/contracts/AUTH_WEEK2_CONTRACT.md",
-      "requirement": "Error envelope includes code/message/request_id",
+      "source": "docs/FRONTEND_GITHUB_ISSUES.md",
+      "requirement": "FE-007 adds frontend build gate in CI",
       "scope": "diff",
       "patterns": [
-        "\"error\"",
-        "\"request_id\""
-      ],
-      "on_missing": "PARTIAL"
-    },
-    {
-      "source": "docs/contracts/AUTH_WEEK2_MIGRATION_SCOPE.md",
-      "requirement": "Add saas_users table",
-      "scope": "diff",
-      "patterns": [
-        "create_table\\(\"saas_users\"",
-        "__tablename__ = \"saas_users\""
+        "name: Frontend build",
+        "npm run build"
       ],
       "on_missing": "FAIL"
     },
     {
-      "source": "docs/contracts/AUTH_WEEK2_MIGRATION_SCOPE.md",
-      "requirement": "Add saas_tenant_memberships table",
+      "source": "docs/FRONTEND_GITHUB_ISSUES.md",
+      "requirement": "Frontend package scripts include test runner",
       "scope": "diff",
       "patterns": [
-        "create_table\\(\"saas_tenant_memberships\"",
-        "__tablename__ = \"saas_tenant_memberships\""
+        "\"test\": \"vitest run\""
       ],
       "on_missing": "FAIL"
     },
     {
-      "source": "docs/contracts/AUTH_WEEK2_MIGRATION_SCOPE.md",
-      "requirement": "Add saas_auth_sessions table",
+      "source": "docs/frontend/FE_OPENAPI_CLIENT_PLAN.md",
+      "requirement": "Generated-client drift check includes untracked files guard",
       "scope": "diff",
       "patterns": [
-        "create_table\\(\"saas_auth_sessions\"",
-        "__tablename__ = \"saas_auth_sessions\""
+        "untracked-files=all -- src/shared/api/generated",
+        "Generated API client drift detected"
       ],
       "on_missing": "FAIL"
     },
     {
-      "source": "docs/contracts/AUTH_WEEK2_CONTRACT.md",
-      "requirement": "AUTH_RATE_LIMITED is explicitly deferred/documented",
+      "source": "docs/FRONTEND_GITHUB_ISSUES.md",
+      "requirement": "Frontend tests include failure-path coverage",
       "scope": "diff",
       "patterns": [
-        "AUTH_RATE_LIMITED.*reserved",
-        "AUTH_RATE_LIMITED.*not yet enforced"
+        "does not throw on circular objects",
+        "\\[Circular\\]"
       ],
-      "on_missing": "DEFERRED",
-      "notes": "Use DEFERRED/PARTIAL for consciously postponed contract items."
+      "on_missing": "FAIL"
     }
   ]
 }
