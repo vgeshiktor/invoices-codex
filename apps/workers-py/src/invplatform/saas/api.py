@@ -155,9 +155,15 @@ def _provider_to_dict(row: ProviderConfig) -> dict[str, object]:
     try:
         config = json.loads(row.config_json)
     except json.JSONDecodeError:
+        raw_config = row.config_json or ""
+        truncated_config = (
+            raw_config if len(raw_config) <= 512 else raw_config[:512] + "...[truncated]"
+        )
         logger.warning(
-            "Failed to decode provider config JSON for provider %s; falling back to empty config.",
+            "Failed to decode provider config JSON for provider %s; falling back to empty config. Raw config_json (truncated): %s",
             row.id,
+            truncated_config,
+            exc_info=True,
         )
         config = {}
 

@@ -107,4 +107,4 @@ Response:
 - `provider.update`
 - `provider.delete`
 
-All include tenant id and request actor (`X-Actor`) when provided.
+All include tenant ID and request actor (`X-Actor`) when provided.
