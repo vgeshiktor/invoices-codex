@@ -155,14 +155,10 @@ def _provider_to_dict(row: ProviderConfig) -> dict[str, object]:
     try:
         config = json.loads(row.config_json)
     except json.JSONDecodeError:
-        raw_config = row.config_json or ""
-        truncated_config = (
-            raw_config if len(raw_config) <= 512 else raw_config[:512] + "...[truncated]"
-        )
         logger.warning(
-            "Failed to decode provider config JSON for provider %s; falling back to empty config. Raw config_json (truncated): %s",
+            "Failed to decode provider config JSON for provider_id=%s tenant_id=%s; falling back to empty config.",
             row.id,
-            truncated_config,
+            row.tenant_id,
             exc_info=True,
         )
         config = {}
@@ -616,8 +612,6 @@ def create_app(config: ApiAppConfig | None = None):
         service: SaaSService = Depends(get_service),
     ) -> dict[str, object]:
         updates = payload.model_dump(exclude_unset=True)
-        if not updates:
-            raise HTTPException(status_code=400, detail="at least one field must be provided")
         try:
             item = service.update_provider_config(
                 tenant_id=tenant_id,
