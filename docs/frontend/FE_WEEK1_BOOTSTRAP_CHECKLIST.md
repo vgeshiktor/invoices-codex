@@ -100,7 +100,7 @@ apps/web/
 - [ ] `cd apps/web && npm run build` succeeds.
 - [ ] `cd apps/web && npm run test` executes baseline test runner successfully.
 
-### Step 5: Hand-off checkpoints for remaining Week 1 issues
+### Step 5: Handoff checkpoints for remaining Week 1 issues
 
 - [ ] `FE-002`: wire ESLint/Prettier/TS strict and keep `lint`/`typecheck` scripts green.
 - [ ] `FE-004`: add OpenAPI client generation command using `integrations/openapi/saas-openapi.v0.1.0.json`.
