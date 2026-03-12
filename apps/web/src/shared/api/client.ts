@@ -111,16 +111,26 @@ const timeoutFetch: typeof fetch = async (input, init) => {
     controller.abort(new DOMException('Request timed out', 'TimeoutError'));
   }, frontendEnv.apiTimeoutMs);
   const requestSignal = input instanceof Request ? input.signal : undefined;
-  const sourceSignal = init?.signal ?? requestSignal;
+  const sourceSignals = [init?.signal, requestSignal].filter(
+    (signal): signal is AbortSignal => signal !== undefined,
+  );
+  const cleanupCallbacks: Array<() => void> = [];
 
-  if (sourceSignal) {
-    if (sourceSignal.aborted) {
-      controller.abort(sourceSignal.reason);
-    } else {
-      sourceSignal.addEventListener('abort', () => controller.abort(sourceSignal.reason), {
-        once: true,
-      });
+  for (const signal of sourceSignals) {
+    if (signal.aborted) {
+      if (!controller.signal.aborted) {
+        controller.abort(signal.reason);
+      }
+      continue;
     }
+
+    const onAbort = () => {
+      if (!controller.signal.aborted) {
+        controller.abort(signal.reason);
+      }
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    cleanupCallbacks.push(() => signal.removeEventListener('abort', onAbort));
   }
 
   try {
@@ -138,6 +148,9 @@ const timeoutFetch: typeof fetch = async (input, init) => {
     }
     throw error;
   } finally {
+    for (const cleanup of cleanupCallbacks) {
+      cleanup();
+    }
     globalThis.clearTimeout(timeoutId);
   }
 };
