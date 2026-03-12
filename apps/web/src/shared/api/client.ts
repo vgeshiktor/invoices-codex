@@ -12,7 +12,21 @@ export interface ApiError {
 const getRequestId = (response?: Response): string | undefined =>
   response?.headers.get('x-request-id') ?? response?.headers.get('X-Request-Id') ?? undefined;
 
+const isAbortError = (error: unknown): error is Error =>
+  error instanceof Error && error.name === 'AbortError';
+
+const isTimeoutError = (error: unknown): error is Error =>
+  error instanceof Error && error.name === 'TimeoutError';
+
 const toErrorMessage = (error: unknown): string => {
+  if (isTimeoutError(error)) {
+    return error.message;
+  }
+
+  if (isAbortError(error)) {
+    return 'Request was canceled before completion';
+  }
+
   if (error instanceof Error && error.message.trim().length > 0) {
     return error.message;
   }
@@ -33,7 +47,11 @@ const toErrorMessage = (error: unknown): string => {
 
 const timeoutFetch: typeof fetch = async (input, init) => {
   const controller = new AbortController();
-  const timeoutId = globalThis.setTimeout(() => controller.abort(), frontendEnv.apiTimeoutMs);
+  let didTimeout = false;
+  const timeoutId = globalThis.setTimeout(() => {
+    didTimeout = true;
+    controller.abort(new DOMException('Request timed out', 'TimeoutError'));
+  }, frontendEnv.apiTimeoutMs);
   const sourceSignal = init?.signal;
 
   if (sourceSignal) {
@@ -51,6 +69,15 @@ const timeoutFetch: typeof fetch = async (input, init) => {
       ...init,
       signal: controller.signal,
     });
+  } catch (error) {
+    if (didTimeout && isAbortError(error)) {
+      const timeoutError = new Error(
+        `Request timed out after ${frontendEnv.apiTimeoutMs}ms`,
+      );
+      timeoutError.name = 'TimeoutError';
+      throw timeoutError;
+    }
+    throw error;
   } finally {
     globalThis.clearTimeout(timeoutId);
   }
@@ -63,7 +90,10 @@ const resolveAuthToken = (auth: Auth): string | undefined => {
   if (auth.name === 'X-Control-Plane-Key') {
     return frontendEnv.controlPlaneKey;
   }
-  return undefined;
+
+  throw new Error(
+    `[api] Unsupported auth header name "${String(auth.name)}". Update resolveAuthToken for new security schemes.`,
+  );
 };
 
 generatedClient.setConfig({

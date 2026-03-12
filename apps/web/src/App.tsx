@@ -16,14 +16,20 @@ type ScreenState =
 
 const toJson = (value: unknown): string => {
   try {
+    const includeStack = frontendEnv.appEnv !== 'production';
     const seen = new WeakSet<object>();
     const json = JSON.stringify(
       value,
-      (_key, currentValue: unknown) => {
+      (key, currentValue: unknown) => {
+        if (key === 'stack' && !includeStack) {
+          return undefined;
+        }
+
         if (currentValue instanceof Error) {
           return {
             message: currentValue.message,
             name: currentValue.name,
+            ...(includeStack ? { stack: currentValue.stack } : {}),
           };
         }
         if (typeof currentValue === 'bigint') {
