@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { getDashboardSummary } from './features/dashboard/api/getDashboardSummary';
-import type { ApiError } from './shared/api/client';
+import { normalizeApiError, type ApiError } from './shared/api/client';
 import type { DashboardSummaryV1DashboardSummaryGetResponse } from './shared/api/generated';
 import { frontendEnv } from './shared/config/env';
 import './App.css';
@@ -11,36 +11,67 @@ type ScreenState =
   | {
       mode: 'success';
       data: DashboardSummaryV1DashboardSummaryGetResponse | null;
-      requestId?: string;
-      status: number;
     }
-  | { mode: 'error'; error: ApiError; requestId?: string; status?: number };
+  | { mode: 'error'; error: ApiError };
 
-const toJson = (value: unknown): string => JSON.stringify(value, null, 2);
+const toJson = (value: unknown): string => {
+  try {
+    const seen = new WeakSet<object>();
+    const json = JSON.stringify(
+      value,
+      (_key, currentValue: unknown) => {
+        if (currentValue instanceof Error) {
+          return {
+            message: currentValue.message,
+            name: currentValue.name,
+            stack: currentValue.stack,
+          };
+        }
+        if (typeof currentValue === 'bigint') {
+          return currentValue.toString();
+        }
+        if (currentValue && typeof currentValue === 'object') {
+          if (seen.has(currentValue)) {
+            return '[Circular]';
+          }
+          seen.add(currentValue);
+        }
+        return currentValue;
+      },
+      2,
+    );
+    return json ?? String(value);
+  } catch {
+    return String(value);
+  }
+};
 
 function App() {
   const [state, setState] = useState<ScreenState>({ mode: 'idle' });
 
   const loadDashboardSummary = async () => {
     setState({ mode: 'loading' });
-    const response = await getDashboardSummary();
+    try {
+      const response = await getDashboardSummary();
 
-    if ('error' in response) {
+      if (!response.ok) {
+        setState({
+          mode: 'error',
+          error: response.error,
+        });
+        return;
+      }
+
+      setState({
+        mode: 'success',
+        data: response.data,
+      });
+    } catch (error) {
       setState({
         mode: 'error',
-        error: response.error,
-        requestId: response.requestId,
-        status: response.status,
+        error: normalizeApiError(error),
       });
-      return;
     }
-
-    setState({
-      mode: 'success',
-      data: response.data,
-      requestId: response.requestId,
-      status: response.status,
-    });
   };
 
   return (
@@ -73,10 +104,7 @@ function App() {
       {state.mode === 'success' && (
         <section className="app__panel">
           <h2>Success</h2>
-          <p>
-            HTTP {state.status}
-            {state.requestId ? ` | request-id: ${state.requestId}` : ''}
-          </p>
+          <p>Dashboard summary fetched successfully.</p>
           <pre>{toJson(state.data)}</pre>
         </section>
       )}
@@ -86,8 +114,8 @@ function App() {
           <h2>Request failed</h2>
           <p>{state.error.message}</p>
           <p>
-            {state.status ? `HTTP ${state.status}` : 'No HTTP response'}
-            {state.requestId ? ` | request-id: ${state.requestId}` : ''}
+            {state.error.status ? `HTTP ${state.error.status}` : 'No HTTP response'}
+            {state.error.requestId ? ` | request-id: ${state.error.requestId}` : ''}
           </p>
           <pre>{toJson(state.error.cause)}</pre>
         </section>

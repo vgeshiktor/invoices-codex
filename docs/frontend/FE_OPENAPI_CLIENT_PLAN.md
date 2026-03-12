@@ -143,7 +143,7 @@ Behavior:
 
 Implementation convention:
 - Keep upload call in a dedicated adapter (`features/files/api/upload.ts`).
-- Adapter handles `File` -> request body mapping and explicit content-type handling.
+- Adapter handles `File` -> request body mapping and explicit Content-Type handling.
 - Do not spread upload payload construction into UI components.
 
 ## 11. Endpoint and Header Ownership Matrix (Current Contract)

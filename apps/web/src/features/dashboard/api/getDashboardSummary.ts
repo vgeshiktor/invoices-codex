@@ -1,22 +1,18 @@
-import { apiClient, getApiRequestId, normalizeApiError, type ApiError } from '../../../shared/api/client';
+import { apiClient, normalizeApiError, type ApiError } from '../../../shared/api/client';
 import {
   dashboardSummaryV1DashboardSummaryGet,
   type DashboardSummaryV1DashboardSummaryGetResponse,
 } from '../../../shared/api/generated';
 
-type DashboardSummarySuccess = {
-  data: DashboardSummaryV1DashboardSummaryGetResponse | null;
-  requestId?: string;
-  status: number;
-};
-
-type DashboardSummaryFailure = {
-  error: ApiError;
-  requestId?: string;
-  status?: number;
-};
-
-export type DashboardSummaryResult = DashboardSummarySuccess | DashboardSummaryFailure;
+export type DashboardSummaryResult =
+  | {
+      ok: true;
+      data: DashboardSummaryV1DashboardSummaryGetResponse | null;
+    }
+  | {
+      ok: false;
+      error: ApiError;
+    };
 
 export const getDashboardSummary = async (): Promise<DashboardSummaryResult> => {
   const result = await dashboardSummaryV1DashboardSummaryGet({
@@ -25,15 +21,13 @@ export const getDashboardSummary = async (): Promise<DashboardSummaryResult> => 
 
   if (result.error !== undefined) {
     return {
+      ok: false,
       error: normalizeApiError(result.error, result.response),
-      requestId: getApiRequestId(result.response),
-      status: result.response?.status,
     };
   }
 
   return {
+    ok: true,
     data: result.data ?? null,
-    requestId: getApiRequestId(result.response),
-    status: result.response.status,
   };
 };
