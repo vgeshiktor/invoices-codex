@@ -24,7 +24,6 @@ const toJson = (value: unknown): string => {
           return {
             message: currentValue.message,
             name: currentValue.name,
-            stack: currentValue.stack,
           };
         }
         if (typeof currentValue === 'bigint') {
