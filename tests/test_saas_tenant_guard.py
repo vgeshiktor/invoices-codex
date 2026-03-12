@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import select
 
 from invplatform.saas.db import TenantGuardError, build_engine, build_session_factory
-from invplatform.saas.models import Base, InvoiceRecord, Tenant
+from invplatform.saas.models import Base, InvoiceRecord, ProviderConfig, Tenant
 
 
 def test_tenant_guard_blocks_tenantless_scoped_select(tmp_path: Path) -> None:
@@ -46,11 +46,29 @@ def test_tenant_guard_blocks_tenantless_scoped_select(tmp_path: Path) -> None:
                 raw_json="{}",
             )
         )
+        session.add(
+            ProviderConfig(
+                tenant_id=t1.id,
+                provider_type="gmail",
+                connection_status="disconnected",
+                config_json="{}",
+            )
+        )
+        session.add(
+            ProviderConfig(
+                tenant_id=t2.id,
+                provider_type="outlook",
+                connection_status="disconnected",
+                config_json="{}",
+            )
+        )
         session.commit()
 
     with session_factory() as session:
         with pytest.raises(TenantGuardError):
             session.execute(select(InvoiceRecord)).scalars().all()
+        with pytest.raises(TenantGuardError):
+            session.execute(select(ProviderConfig)).scalars().all()
 
 
 def test_tenant_guard_auto_filters_by_session_tenant(tmp_path: Path) -> None:
@@ -90,8 +108,27 @@ def test_tenant_guard_auto_filters_by_session_tenant(tmp_path: Path) -> None:
                 raw_json="{}",
             )
         )
+        session.add(
+            ProviderConfig(
+                tenant_id=t1.id,
+                provider_type="gmail",
+                connection_status="connected",
+                config_json="{}",
+            )
+        )
+        session.add(
+            ProviderConfig(
+                tenant_id=t2.id,
+                provider_type="outlook",
+                connection_status="error",
+                config_json="{}",
+            )
+        )
         session.commit()
         session.info["tenant_id"] = t1.id
         rows = list(session.execute(select(InvoiceRecord)).scalars().all())
         assert len(rows) == 1
         assert rows[0].vendor == "A"
+        providers = list(session.execute(select(ProviderConfig)).scalars().all())
+        assert len(providers) == 1
+        assert providers[0].provider_type == "gmail"

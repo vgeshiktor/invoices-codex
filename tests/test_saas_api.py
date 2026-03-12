@@ -270,8 +270,10 @@ def test_openapi_exposes_api_key_security_scheme(tmp_path: Path) -> None:
         == "X-Control-Plane-Key"
     )
     assert "/v1/invoices" in body["paths"]
+    assert "/v1/providers" in body["paths"]
     assert "/v1/control-plane/tenants" in body["paths"]
     assert body["paths"]["/v1/files"]["post"]["security"] == [{"ApiKeyAuth": []}]
+    assert body["paths"]["/v1/providers"]["get"]["security"] == [{"ApiKeyAuth": []}]
     assert body["paths"]["/v1/control-plane/tenants"]["get"]["security"] == [
         {"ControlPlaneKeyAuth": []}
     ]
@@ -308,6 +310,179 @@ def test_admin_api_key_management_and_dashboard_summary(tmp_path: Path) -> None:
     assert "totals" in body
     assert "parse_jobs_by_status" in body
     assert "reports_by_status" in body
+
+
+def test_provider_crud_and_tenant_isolation(tmp_path: Path) -> None:
+    client, api_key, tenant_id = _client(tmp_path)
+    app = cast(Any, client.app)
+    _other_tenant, other_key = app.state.service.bootstrap_tenant("Other Tenant")
+
+    def _assert_provider_response_omits_encrypted_tokens(
+        provider_body: dict[str, object],
+    ) -> None:
+        assert "oauth_access_token_enc" not in provider_body
+        assert "oauth_refresh_token_enc" not in provider_body
+
+    created = client.post(
+        "/v1/providers",
+        headers={"X-API-Key": api_key, "X-Actor": "owner"},
+        json={
+            "provider_type": "gmail",
+            "display_name": "Ops Gmail",
+            "connection_status": "disconnected",
+            "config": {"sync_window_days": 30},
+        },
+    )
+    assert created.status_code == 201
+    provider = created.json()
+    provider_id = provider["id"]
+    assert provider["provider_type"] == "gmail"
+    assert provider["tenant_id"] == tenant_id
+    _assert_provider_response_omits_encrypted_tokens(provider)
+
+    duplicate = client.post(
+        "/v1/providers",
+        headers={"X-API-Key": api_key},
+        json={"provider_type": "gmail"},
+    )
+    assert duplicate.status_code == 409
+
+    listed = client.get(
+        "/v1/providers?limit=10&offset=0", headers={"X-API-Key": api_key}
+    )
+    assert listed.status_code == 200
+    listed_body = listed.json()
+    assert listed_body["total"] == 1
+    assert listed_body["items"][0]["id"] == provider_id
+    _assert_provider_response_omits_encrypted_tokens(listed_body["items"][0])
+
+    other_listed = client.get("/v1/providers", headers={"X-API-Key": other_key})
+    assert other_listed.status_code == 200
+    assert other_listed.json()["total"] == 0
+
+    updated = client.patch(
+        f"/v1/providers/{provider_id}",
+        headers={"X-API-Key": api_key},
+        json={
+            "connection_status": "connected",
+            "token_expires_at": "2030-01-01T00:00:00+00:00",
+            "last_error_code": None,
+            "last_error_message": None,
+        },
+    )
+    assert updated.status_code == 200
+    updated_body = updated.json()
+    assert updated_body["connection_status"] == "connected"
+    assert updated_body["token_expires_at"].startswith("2030-01-01T00:00:00")
+    assert updated_body["last_error_code"] is None
+    _assert_provider_response_omits_encrypted_tokens(updated_body)
+
+    denied_update = client.patch(
+        f"/v1/providers/{provider_id}",
+        headers={"X-API-Key": other_key},
+        json={"connection_status": "error"},
+    )
+    assert denied_update.status_code == 404
+
+    denied_delete = client.delete(
+        f"/v1/providers/{provider_id}", headers={"X-API-Key": other_key}
+    )
+    assert denied_delete.status_code == 404
+
+    deleted = client.delete(
+        f"/v1/providers/{provider_id}", headers={"X-API-Key": api_key}
+    )
+    assert deleted.status_code == 204
+
+    after_delete = client.get("/v1/providers", headers={"X-API-Key": api_key})
+    assert after_delete.status_code == 200
+    assert after_delete.json()["total"] == 0
+
+
+def test_provider_create_validation_error_mapping(tmp_path: Path) -> None:
+    client, api_key, _tenant_id = _client(tmp_path)
+    headers = {"X-API-Key": api_key}
+
+    invalid_provider = client.post(
+        "/v1/providers",
+        headers=headers,
+        json={"provider_type": "dropbox"},
+    )
+    assert invalid_provider.status_code == 400
+    assert "provider_type" in invalid_provider.json()["detail"]
+
+    invalid_status = client.post(
+        "/v1/providers",
+        headers=headers,
+        json={"provider_type": "gmail", "connection_status": "invalid-status"},
+    )
+    assert invalid_status.status_code == 400
+    assert "connection_status" in invalid_status.json()["detail"]
+
+    invalid_config = client.post(
+        "/v1/providers",
+        headers=headers,
+        json={"provider_type": "gmail", "config": "not-an-object"},
+    )
+    assert invalid_config.status_code == 400
+    assert invalid_config.json()["detail"] == "config must be an object"
+
+
+def test_provider_update_validation_conflict_and_not_found_mapping(
+    tmp_path: Path,
+) -> None:
+    client, api_key, _tenant_id = _client(tmp_path)
+    headers = {"X-API-Key": api_key}
+
+    gmail = client.post(
+        "/v1/providers", headers=headers, json={"provider_type": "gmail"}
+    )
+    assert gmail.status_code == 201
+    gmail_id = gmail.json()["id"]
+
+    outlook = client.post(
+        "/v1/providers",
+        headers=headers,
+        json={"provider_type": "outlook"},
+    )
+    assert outlook.status_code == 201
+    outlook_id = outlook.json()["id"]
+
+    empty_patch = client.patch(f"/v1/providers/{gmail_id}", headers=headers, json={})
+    assert empty_patch.status_code == 400
+    assert empty_patch.json()["detail"] == "at least one field must be provided"
+
+    invalid_patch = client.patch(
+        f"/v1/providers/{gmail_id}",
+        headers=headers,
+        json={"connection_status": "not-real"},
+    )
+    assert invalid_patch.status_code == 400
+    assert "connection_status" in invalid_patch.json()["detail"]
+
+    invalid_config_patch = client.patch(
+        f"/v1/providers/{gmail_id}",
+        headers=headers,
+        json={"config": []},
+    )
+    assert invalid_config_patch.status_code == 400
+    assert invalid_config_patch.json()["detail"] == "config must be an object or null"
+
+    duplicate_provider_type = client.patch(
+        f"/v1/providers/{outlook_id}",
+        headers=headers,
+        json={"provider_type": "gmail"},
+    )
+    assert duplicate_provider_type.status_code == 409
+    assert "already exists" in duplicate_provider_type.json()["detail"]
+
+    missing_provider = client.patch(
+        "/v1/providers/missing-provider-id",
+        headers=headers,
+        json={"connection_status": "error"},
+    )
+    assert missing_provider.status_code == 404
+    assert missing_provider.json()["detail"] == "provider config not found"
 
 
 def test_control_plane_tenant_bootstrap_and_listing(tmp_path: Path) -> None:

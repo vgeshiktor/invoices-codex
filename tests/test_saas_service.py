@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 import re
 
@@ -7,9 +8,16 @@ import pytest
 from sqlalchemy import select
 
 from invplatform.saas.db import build_engine, build_session_factory
-from invplatform.saas.models import Base, IdempotencyRecord, ParseJob, Report
+from invplatform.saas.models import (
+    AuditEvent,
+    Base,
+    IdempotencyRecord,
+    ParseJob,
+    ProviderConfig,
+    Report,
+)
 from invplatform.saas.queue import InMemoryJobQueue
-from invplatform.saas.service import PARSE_JOB_TASK, SaaSService
+from invplatform.saas.service import PARSE_JOB_TASK, ProviderConfigError, SaaSService
 
 
 def _build_service(tmp_path: Path) -> tuple[SaaSService, InMemoryJobQueue]:
@@ -75,6 +83,238 @@ def test_create_tenant_user_existing_user_requires_password_match(
             password="wrong-pass",
             role="viewer",
         )
+
+
+def test_provider_config_crud_and_tenant_isolation(tmp_path: Path) -> None:
+    service, _queue = _build_service(tmp_path)
+    tenant_a, _ = service.bootstrap_tenant("Tenant A")
+    tenant_b, _ = service.bootstrap_tenant("Tenant B")
+
+    created = service.create_provider_config(
+        tenant_a.id,
+        provider_type="GMAIL",
+        display_name=" Ops Gmail ",
+        config={"sync_window_days": 30},
+        actor="ops-a",
+    )
+    assert created.provider_type == "gmail"
+    assert created.display_name == "Ops Gmail"
+
+    items_a, total_a = service.list_provider_configs(tenant_a.id)
+    assert total_a == 1
+    assert items_a[0].id == created.id
+    assert items_a[0].provider_type == "gmail"
+
+    items_b, total_b = service.list_provider_configs(tenant_b.id)
+    assert total_b == 0
+    assert items_b == []
+
+    with pytest.raises(ValueError, match="already exists"):
+        service.create_provider_config(tenant_a.id, provider_type="gmail")
+
+    second_tenant_item = service.create_provider_config(
+        tenant_b.id, provider_type="gmail"
+    )
+    assert second_tenant_item.id != created.id
+
+    updated = service.update_provider_config(
+        tenant_a.id,
+        created.id,
+        updates={
+            "connection_status": "connected",
+            "token_expires_at": datetime.now(timezone.utc),
+            "last_error_code": None,
+            "last_error_message": None,
+        },
+        actor="ops-a",
+    )
+    assert updated.connection_status == "connected"
+    assert updated.token_expires_at is not None
+
+    with pytest.raises(ValueError, match="provider config not found"):
+        service.update_provider_config(
+            tenant_b.id, created.id, updates={"connection_status": "error"}
+        )
+
+    service.delete_provider_config(tenant_a.id, created.id, actor="ops-a")
+    items_after_delete, total_after_delete = service.list_provider_configs(tenant_a.id)
+    assert total_after_delete == 0
+    assert items_after_delete == []
+
+    with service.session_factory() as session:
+        session.info["tenant_id"] = tenant_a.id
+        events = list(
+            session.execute(
+                select(AuditEvent).where(
+                    AuditEvent.tenant_id == tenant_a.id,
+                    AuditEvent.event_type.in_(
+                        {"provider.create", "provider.update", "provider.delete"}
+                    ),
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert [event.event_type for event in events] == [
+            "provider.create",
+            "provider.update",
+            "provider.delete",
+        ]
+        rows = list(
+            session.execute(
+                select(ProviderConfig).where(ProviderConfig.tenant_id == tenant_a.id)
+            )
+            .scalars()
+            .all()
+        )
+        assert rows == []
+
+
+@pytest.mark.parametrize("invalid_provider_type", [None, "", "  ", "dropbox", 123])
+def test_create_provider_config_invalid_provider_type(
+    tmp_path: Path, invalid_provider_type: object
+) -> None:
+    service, _queue = _build_service(tmp_path)
+    tenant, _ = service.bootstrap_tenant("Tenant")
+
+    with pytest.raises(ValueError, match="provider_type"):
+        service.create_provider_config(
+            tenant.id,
+            provider_type=invalid_provider_type,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize("invalid_status", [None, "", "  ", "unknown", 123])
+def test_create_provider_config_invalid_connection_status(
+    tmp_path: Path, invalid_status: object
+) -> None:
+    service, _queue = _build_service(tmp_path)
+    tenant, _ = service.bootstrap_tenant("Tenant")
+
+    with pytest.raises(ValueError, match="connection_status"):
+        service.create_provider_config(
+            tenant.id,
+            provider_type="gmail",
+            connection_status=invalid_status,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize("invalid_config", [[], "not-a-dict", 123])
+def test_create_provider_config_non_dict_config(
+    tmp_path: Path, invalid_config: object
+) -> None:
+    service, _queue = _build_service(tmp_path)
+    tenant, _ = service.bootstrap_tenant("Tenant")
+
+    with pytest.raises(ValueError, match="config must be an object"):
+        service.create_provider_config(
+            tenant.id,
+            provider_type="gmail",
+            config=invalid_config,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize("limit, offset", [(0, 0), (-1, 0), (1, -1)])
+def test_list_provider_configs_invalid_pagination(
+    tmp_path: Path, limit: int, offset: int
+) -> None:
+    service, _queue = _build_service(tmp_path)
+    tenant, _ = service.bootstrap_tenant("Tenant")
+
+    with pytest.raises(ValueError):
+        service.list_provider_configs(tenant.id, limit=limit, offset=offset)
+
+
+def test_update_provider_config_empty_updates(tmp_path: Path) -> None:
+    service, _queue = _build_service(tmp_path)
+    tenant, _ = service.bootstrap_tenant("Tenant")
+    row = service.create_provider_config(tenant.id, provider_type="gmail")
+
+    with pytest.raises(ValueError, match="at least one field must be provided"):
+        service.update_provider_config(tenant.id, row.id, updates={})
+
+
+def test_update_provider_config_unknown_field(tmp_path: Path) -> None:
+    service, _queue = _build_service(tmp_path)
+    tenant, _ = service.bootstrap_tenant("Tenant")
+    row = service.create_provider_config(tenant.id, provider_type="gmail")
+
+    with pytest.raises(ValueError, match="unknown provider fields"):
+        service.update_provider_config(
+            tenant.id, row.id, updates={"not_real_field": True}
+        )
+
+
+def test_update_provider_config_duplicate_provider_type_for_tenant(
+    tmp_path: Path,
+) -> None:
+    service, _queue = _build_service(tmp_path)
+    tenant, _ = service.bootstrap_tenant("Tenant")
+    first = service.create_provider_config(tenant.id, provider_type="gmail")
+    second = service.create_provider_config(tenant.id, provider_type="outlook")
+
+    with pytest.raises(ValueError, match="already exists"):
+        service.update_provider_config(
+            tenant.id,
+            second.id,
+            updates={"provider_type": first.provider_type},
+        )
+
+
+def test_update_provider_config_type_checks_and_normalization(tmp_path: Path) -> None:
+    service, _queue = _build_service(tmp_path)
+    tenant, _ = service.bootstrap_tenant("Tenant")
+    row = service.create_provider_config(tenant.id, provider_type="gmail")
+
+    bad_updates: tuple[dict[str, object], ...] = (
+        {"provider_type": 123},
+        {"connection_status": 123},
+        {"display_name": 123},
+        {"config": []},
+        {"token_expires_at": "not-a-datetime"},
+        {"last_successful_sync_at": "not-a-datetime"},
+        {"last_error_code": 123},
+        {"last_error_message": 123},
+    )
+    for updates in bad_updates:
+        with pytest.raises(ValueError):
+            service.update_provider_config(tenant.id, row.id, updates=updates)
+
+    updated = service.update_provider_config(
+        tenant.id,
+        row.id,
+        updates={
+            "display_name": "  New Name  ",
+            "token_expires_at": datetime(2030, 1, 1, 0, 0, 0),
+            "last_successful_sync_at": datetime(2030, 1, 2, 0, 0, 0),
+            "last_error_code": "   ",
+            "last_error_message": "   ",
+        },
+    )
+    assert updated.display_name == "New Name"
+    assert updated.last_error_code is None
+    assert updated.last_error_message is None
+    assert updated.token_expires_at is not None
+    assert updated.token_expires_at.tzinfo is not None
+    assert updated.token_expires_at.tzinfo.utcoffset(
+        updated.token_expires_at
+    ) == timezone.utc.utcoffset(updated.token_expires_at)
+    assert updated.last_successful_sync_at is not None
+    assert updated.last_successful_sync_at.tzinfo is not None
+
+
+def test_create_provider_config_maps_db_unique_conflict(tmp_path: Path) -> None:
+    service, _queue = _build_service(tmp_path)
+    tenant, _ = service.bootstrap_tenant("Tenant")
+    service.create_provider_config(tenant.id, provider_type="gmail")
+
+    def _skip_unique_check(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    service._ensure_unique_provider_type = _skip_unique_check  # type: ignore[method-assign]
+    with pytest.raises(ProviderConfigError, match="already exists") as exc:
+        service.create_provider_config(tenant.id, provider_type="gmail")
+    assert exc.value.code == "PROVIDER_CONFLICT"
 
 
 def test_register_file_and_create_parse_job_enqueues_task(tmp_path: Path) -> None:

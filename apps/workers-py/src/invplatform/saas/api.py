@@ -1,4 +1,5 @@
 import json
+import logging
 import time
 from dataclasses import asdict, dataclass
 from datetime import date, datetime
@@ -9,10 +10,21 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from .db import build_engine, build_session_factory
 from .metrics import MetricsRegistry
-from .models import ApiKey, Base, InvoiceRecord, ParseJob, Report, ReportArtifact, Tenant
+from .models import (
+    ApiKey,
+    Base,
+    InvoiceRecord,
+    ParseJob,
+    ProviderConfig,
+    Report,
+    ReportArtifact,
+    Tenant,
+)
 from .queue import build_queue
-from .service import AuthError, SaaSService, ServiceConfig
+from .service import AuthError, ProviderConfigError, SaaSService, ServiceConfig
 from .storage import StorageBackend, build_storage
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -139,6 +151,34 @@ def _report_to_dict(row: Report, artifacts: list[ReportArtifact]) -> dict[str, o
     }
 
 
+def _provider_to_dict(row: ProviderConfig) -> dict[str, object]:
+    try:
+        config = json.loads(row.config_json)
+    except json.JSONDecodeError:
+        logger.warning(
+            "Failed to decode provider config JSON for provider_id=%s tenant_id=%s; falling back to empty config.",
+            row.id,
+            row.tenant_id,
+            exc_info=True,
+        )
+        config = {}
+
+    return {
+        "id": row.id,
+        "tenant_id": row.tenant_id,
+        "provider_type": row.provider_type,
+        "display_name": row.display_name,
+        "connection_status": row.connection_status,
+        "config": config,
+        "token_expires_at": _iso(row.token_expires_at),
+        "last_successful_sync_at": _iso(row.last_successful_sync_at),
+        "last_error_code": row.last_error_code,
+        "last_error_message": row.last_error_message,
+        "created_at": _iso(row.created_at),
+        "updated_at": _iso(row.updated_at),
+    }
+
+
 def create_app(config: ApiAppConfig | None = None):
     try:
         from fastapi import (  # type: ignore[import-not-found]
@@ -202,6 +242,22 @@ def create_app(config: ApiAppConfig | None = None):
         password: str
         tenant_slug: str
 
+    class ProviderCreateRequest(BaseModel):
+        provider_type: str
+        display_name: str | None = None
+        connection_status: str = "disconnected"
+        config: object | None = None
+
+    class ProviderUpdateRequest(BaseModel):
+        provider_type: str | None = None
+        display_name: str | None = None
+        connection_status: str | None = None
+        config: object | None = None
+        token_expires_at: datetime | None = None
+        last_successful_sync_at: datetime | None = None
+        last_error_code: str | None = None
+        last_error_message: str | None = None
+
     def get_service() -> SaaSService:
         return app.state.service  # type: ignore[no-any-return]
 
@@ -251,6 +307,14 @@ def create_app(config: ApiAppConfig | None = None):
                 }
             },
         )
+
+    def _provider_http_exception(exc: ProviderConfigError) -> HTTPException:
+        status_by_code = {
+            "PROVIDER_NOT_FOUND": 404,
+            "PROVIDER_CONFLICT": 409,
+            "PROVIDER_VALIDATION_ERROR": 400,
+        }
+        return HTTPException(status_code=status_by_code.get(exc.code, 400), detail=exc.message)
 
     def _set_refresh_cookie(response: Response, refresh_token: str) -> None:
         response.set_cookie(
@@ -501,6 +565,78 @@ def create_app(config: ApiAppConfig | None = None):
                 "refresh_expires_at": _iso(auth_result.session.refresh_expires_at),
             },
         }
+
+    @app.get("/v1/providers")
+    def list_providers(
+        limit: int = Query(default=100, ge=1, le=1000),
+        offset: int = Query(default=0, ge=0),
+        tenant_id: str = Depends(get_tenant_id),
+        service: SaaSService = Depends(get_service),
+    ) -> dict[str, object]:
+        items, total = service.list_provider_configs(
+            tenant_id=tenant_id, limit=limit, offset=offset
+        )
+        return {
+            "items": [_provider_to_dict(item) for item in items],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
+
+    @app.post("/v1/providers", status_code=201)
+    def create_provider(
+        payload: ProviderCreateRequest,
+        tenant_id: str = Depends(get_tenant_id),
+        actor: str | None = Depends(get_actor),
+        service: SaaSService = Depends(get_service),
+    ) -> dict[str, object]:
+        try:
+            item = service.create_provider_config(
+                tenant_id=tenant_id,
+                provider_type=payload.provider_type,
+                display_name=payload.display_name,
+                connection_status=payload.connection_status,
+                config=payload.config,
+                actor=actor,
+            )
+        except ProviderConfigError as exc:
+            raise _provider_http_exception(exc) from exc
+        return _provider_to_dict(item)
+
+    @app.patch("/v1/providers/{provider_id}")
+    def update_provider(
+        provider_id: str,
+        payload: ProviderUpdateRequest,
+        tenant_id: str = Depends(get_tenant_id),
+        actor: str | None = Depends(get_actor),
+        service: SaaSService = Depends(get_service),
+    ) -> dict[str, object]:
+        updates = payload.model_dump(exclude_unset=True)
+        try:
+            item = service.update_provider_config(
+                tenant_id=tenant_id,
+                provider_id=provider_id,
+                updates=updates,
+                actor=actor,
+            )
+        except ProviderConfigError as exc:
+            raise _provider_http_exception(exc) from exc
+        return _provider_to_dict(item)
+
+    @app.delete("/v1/providers/{provider_id}", status_code=204)
+    def delete_provider(
+        provider_id: str,
+        tenant_id: str = Depends(get_tenant_id),
+        actor: str | None = Depends(get_actor),
+        service: SaaSService = Depends(get_service),
+    ) -> Response:
+        try:
+            service.delete_provider_config(
+                tenant_id=tenant_id, provider_id=provider_id, actor=actor
+            )
+        except ProviderConfigError as exc:
+            raise _provider_http_exception(exc) from exc
+        return Response(status_code=204)
 
     @app.get("/dashboard", include_in_schema=False)
     def dashboard_page():
