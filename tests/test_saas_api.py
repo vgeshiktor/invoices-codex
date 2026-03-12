@@ -317,6 +317,12 @@ def test_provider_crud_and_tenant_isolation(tmp_path: Path) -> None:
     app = cast(Any, client.app)
     _other_tenant, other_key = app.state.service.bootstrap_tenant("Other Tenant")
 
+    def _assert_provider_response_omits_encrypted_tokens(
+        provider_body: dict[str, object],
+    ) -> None:
+        assert "oauth_access_token_enc" not in provider_body
+        assert "oauth_refresh_token_enc" not in provider_body
+
     created = client.post(
         "/v1/providers",
         headers={"X-API-Key": api_key, "X-Actor": "owner"},
@@ -332,6 +338,7 @@ def test_provider_crud_and_tenant_isolation(tmp_path: Path) -> None:
     provider_id = provider["id"]
     assert provider["provider_type"] == "gmail"
     assert provider["tenant_id"] == tenant_id
+    _assert_provider_response_omits_encrypted_tokens(provider)
 
     duplicate = client.post(
         "/v1/providers",
@@ -347,6 +354,7 @@ def test_provider_crud_and_tenant_isolation(tmp_path: Path) -> None:
     listed_body = listed.json()
     assert listed_body["total"] == 1
     assert listed_body["items"][0]["id"] == provider_id
+    _assert_provider_response_omits_encrypted_tokens(listed_body["items"][0])
 
     other_listed = client.get("/v1/providers", headers={"X-API-Key": other_key})
     assert other_listed.status_code == 200
@@ -367,6 +375,7 @@ def test_provider_crud_and_tenant_isolation(tmp_path: Path) -> None:
     assert updated_body["connection_status"] == "connected"
     assert updated_body["token_expires_at"].startswith("2030-01-01T00:00:00")
     assert updated_body["last_error_code"] is None
+    _assert_provider_response_omits_encrypted_tokens(updated_body)
 
     denied_update = client.patch(
         f"/v1/providers/{provider_id}",
