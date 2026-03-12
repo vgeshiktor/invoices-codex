@@ -78,6 +78,13 @@ class AuthError(RuntimeError):
         self.status_code = status_code
 
 
+class ProviderConfigError(ValueError):
+    def __init__(self, *, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
 @dataclass
 class ServiceConfig:
     parse_job_task_name: str = PARSE_JOB_TASK
@@ -221,19 +228,102 @@ class SaaSService:
             return None
         return user, membership, tenant
 
-    def _normalize_provider_type(self, provider_type: str) -> str:
+    def _normalize_provider_type(self, provider_type: object) -> str:
+        if not isinstance(provider_type, str):
+            raise ProviderConfigError(
+                code="PROVIDER_VALIDATION_ERROR", message="provider_type must be a string"
+            )
         normalized = provider_type.strip().lower()
         if normalized not in _PROVIDER_ALLOWED_TYPES:
             allowed = ", ".join(sorted(_PROVIDER_ALLOWED_TYPES))
-            raise ValueError(f"provider_type must be one of: {allowed}")
+            raise ProviderConfigError(
+                code="PROVIDER_VALIDATION_ERROR",
+                message=f"provider_type must be one of: {allowed}",
+            )
         return normalized
 
-    def _normalize_provider_status(self, connection_status: str) -> str:
+    def _normalize_provider_status(self, connection_status: object) -> str:
+        if not isinstance(connection_status, str):
+            raise ProviderConfigError(
+                code="PROVIDER_VALIDATION_ERROR", message="connection_status must be a string"
+            )
         normalized = connection_status.strip().lower()
         if normalized not in _PROVIDER_ALLOWED_STATUSES:
             allowed = ", ".join(sorted(_PROVIDER_ALLOWED_STATUSES))
-            raise ValueError(f"connection_status must be one of: {allowed}")
+            raise ProviderConfigError(
+                code="PROVIDER_VALIDATION_ERROR",
+                message=f"connection_status must be one of: {allowed}",
+            )
         return normalized
+
+    def _str_or_none(self, value: object, field_name: str) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ProviderConfigError(
+                code="PROVIDER_VALIDATION_ERROR",
+                message=f"{field_name} must be a string or null",
+            )
+        return value.strip() or None
+
+    def _nullable_datetime(self, value: object, field_name: str) -> datetime | None:
+        if value is None:
+            return None
+        if not isinstance(value, datetime):
+            raise ProviderConfigError(
+                code="PROVIDER_VALIDATION_ERROR",
+                message=f"{field_name} must be a datetime or null",
+            )
+        return _coerce_utc(value)
+
+    def _config_to_json(self, value: object, *, allow_null: bool) -> str:
+        if value is None:
+            if allow_null:
+                return "{}"
+            raise ProviderConfigError(
+                code="PROVIDER_VALIDATION_ERROR", message="config must be an object"
+            )
+        if not isinstance(value, dict):
+            suffix = " or null" if allow_null else ""
+            raise ProviderConfigError(
+                code="PROVIDER_VALIDATION_ERROR",
+                message=f"config must be an object{suffix}",
+            )
+        return json.dumps(value, sort_keys=True)
+
+    def _ensure_unique_provider_type(
+        self,
+        session: Session,
+        *,
+        tenant_id: str,
+        provider_type: str,
+        exclude_id: str | None = None,
+    ) -> None:
+        stmt = select(ProviderConfig.id).where(
+            ProviderConfig.tenant_id == tenant_id,
+            ProviderConfig.provider_type == provider_type,
+        )
+        if exclude_id is not None:
+            stmt = stmt.where(ProviderConfig.id != exclude_id)
+        duplicate = session.execute(stmt).scalar_one_or_none()
+        if duplicate is not None:
+            raise ProviderConfigError(
+                code="PROVIDER_CONFLICT",
+                message="provider config already exists for provider_type",
+            )
+
+    def _is_provider_unique_violation(self, exc: IntegrityError) -> bool:
+        raw_message = str(getattr(exc, "orig", exc)).lower()
+        return (
+            "uq_saas_provider_configs_tenant_provider" in raw_message
+            or "saas_provider_configs.tenant_id, saas_provider_configs.provider_type" in raw_message
+        )
+
+    def _normalize_provider_row_datetimes(self, row: ProviderConfig) -> None:
+        if row.token_expires_at is not None:
+            row.token_expires_at = _coerce_utc(row.token_expires_at)
+        if row.last_successful_sync_at is not None:
+            row.last_successful_sync_at = _coerce_utc(row.last_successful_sync_at)
 
     def _emit_auth_event(
         self,
@@ -802,9 +892,13 @@ class SaaSService:
         self, tenant_id: str, *, limit: int = 100, offset: int = 0
     ) -> tuple[list[ProviderConfig], int]:
         if limit < 1:
-            raise ValueError("limit must be >= 1")
+            raise ProviderConfigError(
+                code="PROVIDER_VALIDATION_ERROR", message="limit must be >= 1"
+            )
         if offset < 0:
-            raise ValueError("offset must be >= 0")
+            raise ProviderConfigError(
+                code="PROVIDER_VALIDATION_ERROR", message="offset must be >= 0"
+            )
         with self.session_factory() as session:
             with self._tenant_scope(session, tenant_id):
                 repo = TenantScopedRepository(session, tenant_id)
@@ -827,34 +921,40 @@ class SaaSService:
         provider_type: str,
         display_name: str | None = None,
         connection_status: str = "disconnected",
-        config: dict[str, object] | None = None,
+        config: object | None = None,
         actor: str | None = None,
     ) -> ProviderConfig:
         normalized_type = self._normalize_provider_type(provider_type)
         normalized_status = self._normalize_provider_status(connection_status)
-        if config is not None and not isinstance(config, dict):
-            raise ValueError("config must be an object")
+        config_json = self._config_to_json(config if config is not None else {}, allow_null=False)
+        normalized_display_name = self._str_or_none(display_name, "display_name")
 
         with self.session_factory() as session:
             with self._tenant_scope(session, tenant_id):
-                existing = session.execute(
-                    select(ProviderConfig).where(
-                        ProviderConfig.tenant_id == tenant_id,
-                        ProviderConfig.provider_type == normalized_type,
-                    )
-                ).scalar_one_or_none()
-                if existing is not None:
-                    raise ValueError("provider config already exists for provider_type")
+                self._ensure_unique_provider_type(
+                    session,
+                    tenant_id=tenant_id,
+                    provider_type=normalized_type,
+                )
 
                 row = ProviderConfig(
                     tenant_id=tenant_id,
                     provider_type=normalized_type,
-                    display_name=(display_name or "").strip() or None,
+                    display_name=normalized_display_name,
                     connection_status=normalized_status,
-                    config_json=json.dumps(config or {}, sort_keys=True),
+                    config_json=config_json,
                 )
                 session.add(row)
-                session.flush()
+                try:
+                    session.flush()
+                except IntegrityError as exc:
+                    session.rollback()
+                    if self._is_provider_unique_violation(exc):
+                        raise ProviderConfigError(
+                            code="PROVIDER_CONFLICT",
+                            message="provider config already exists for provider_type",
+                        ) from exc
+                    raise
                 session.add(
                     AuditEvent(
                         tenant_id=tenant_id,
@@ -869,8 +969,18 @@ class SaaSService:
                         ),
                     )
                 )
-                session.commit()
+                try:
+                    session.commit()
+                except IntegrityError as exc:
+                    session.rollback()
+                    if self._is_provider_unique_violation(exc):
+                        raise ProviderConfigError(
+                            code="PROVIDER_CONFLICT",
+                            message="provider config already exists for provider_type",
+                        ) from exc
+                    raise
                 session.refresh(row)
+                self._normalize_provider_row_datetimes(row)
                 return row
 
     def update_provider_config(
@@ -882,7 +992,10 @@ class SaaSService:
         actor: str | None = None,
     ) -> ProviderConfig:
         if not updates:
-            raise ValueError("at least one field must be provided")
+            raise ProviderConfigError(
+                code="PROVIDER_VALIDATION_ERROR",
+                message="at least one field must be provided",
+            )
         allowed_fields = {
             "provider_type",
             "display_name",
@@ -895,7 +1008,10 @@ class SaaSService:
         }
         unknown_fields = sorted(set(updates) - allowed_fields)
         if unknown_fields:
-            raise ValueError(f"unknown provider fields: {', '.join(unknown_fields)}")
+            raise ProviderConfigError(
+                code="PROVIDER_VALIDATION_ERROR",
+                message=f"unknown provider fields: {', '.join(unknown_fields)}",
+            )
 
         with self.session_factory() as session:
             with self._tenant_scope(session, tenant_id):
@@ -906,80 +1022,51 @@ class SaaSService:
                     )
                 ).scalar_one_or_none()
                 if row is None:
-                    raise ValueError("provider config not found")
+                    raise ProviderConfigError(
+                        code="PROVIDER_NOT_FOUND", message="provider config not found"
+                    )
 
                 if "provider_type" in updates:
-                    raw_provider_type = updates["provider_type"]
-                    if not isinstance(raw_provider_type, str):
-                        raise ValueError("provider_type must be a string")
-                    normalized_type = self._normalize_provider_type(raw_provider_type)
+                    normalized_type = self._normalize_provider_type(updates["provider_type"])
                     if normalized_type != row.provider_type:
-                        duplicate = session.execute(
-                            select(ProviderConfig.id).where(
-                                ProviderConfig.tenant_id == tenant_id,
-                                ProviderConfig.provider_type == normalized_type,
-                                ProviderConfig.id != provider_id,
-                            )
-                        ).scalar_one_or_none()
-                        if duplicate is not None:
-                            raise ValueError("provider config already exists for provider_type")
+                        self._ensure_unique_provider_type(
+                            session,
+                            tenant_id=tenant_id,
+                            provider_type=normalized_type,
+                            exclude_id=provider_id,
+                        )
                     row.provider_type = normalized_type
 
                 if "display_name" in updates:
-                    raw_display = updates["display_name"]
-                    if raw_display is None:
-                        row.display_name = None
-                    elif isinstance(raw_display, str):
-                        row.display_name = raw_display.strip() or None
-                    else:
-                        raise ValueError("display_name must be a string or null")
+                    row.display_name = self._str_or_none(updates["display_name"], "display_name")
 
                 if "connection_status" in updates:
-                    raw_status = updates["connection_status"]
-                    if not isinstance(raw_status, str):
-                        raise ValueError("connection_status must be a string")
-                    row.connection_status = self._normalize_provider_status(raw_status)
+                    row.connection_status = self._normalize_provider_status(
+                        updates["connection_status"]
+                    )
 
                 if "config" in updates:
-                    raw_config = updates["config"]
-                    if raw_config is None:
-                        row.config_json = "{}"
-                    elif isinstance(raw_config, dict):
-                        row.config_json = json.dumps(raw_config, sort_keys=True)
-                    else:
-                        raise ValueError("config must be an object or null")
+                    row.config_json = self._config_to_json(updates["config"], allow_null=True)
 
                 if "token_expires_at" in updates:
-                    raw_token_expires = updates["token_expires_at"]
-                    if raw_token_expires is not None and not isinstance(
-                        raw_token_expires, datetime
-                    ):
-                        raise ValueError("token_expires_at must be a datetime or null")
-                    row.token_expires_at = raw_token_expires
+                    row.token_expires_at = self._nullable_datetime(
+                        updates["token_expires_at"], "token_expires_at"
+                    )
 
                 if "last_successful_sync_at" in updates:
-                    raw_last_sync = updates["last_successful_sync_at"]
-                    if raw_last_sync is not None and not isinstance(raw_last_sync, datetime):
-                        raise ValueError("last_successful_sync_at must be a datetime or null")
-                    row.last_successful_sync_at = raw_last_sync
+                    row.last_successful_sync_at = self._nullable_datetime(
+                        updates["last_successful_sync_at"], "last_successful_sync_at"
+                    )
 
                 if "last_error_code" in updates:
-                    raw_last_error_code = updates["last_error_code"]
-                    if raw_last_error_code is None:
-                        row.last_error_code = None
-                    elif isinstance(raw_last_error_code, str):
-                        row.last_error_code = raw_last_error_code.strip() or None
-                    else:
-                        raise ValueError("last_error_code must be a string or null")
+                    row.last_error_code = self._str_or_none(
+                        updates["last_error_code"], "last_error_code"
+                    )
 
                 if "last_error_message" in updates:
-                    raw_last_error_message = updates["last_error_message"]
-                    if raw_last_error_message is None:
-                        row.last_error_message = None
-                    elif isinstance(raw_last_error_message, str):
-                        row.last_error_message = raw_last_error_message.strip() or None
-                    else:
-                        raise ValueError("last_error_message must be a string or null")
+                    row.last_error_message = self._str_or_none(
+                        updates["last_error_message"], "last_error_message"
+                    )
 
                 row.updated_at = _utcnow()
                 session.add(
@@ -996,8 +1083,18 @@ class SaaSService:
                         ),
                     )
                 )
-                session.commit()
+                try:
+                    session.commit()
+                except IntegrityError as exc:
+                    session.rollback()
+                    if self._is_provider_unique_violation(exc):
+                        raise ProviderConfigError(
+                            code="PROVIDER_CONFLICT",
+                            message="provider config already exists for provider_type",
+                        ) from exc
+                    raise
                 session.refresh(row)
+                self._normalize_provider_row_datetimes(row)
                 return row
 
     def delete_provider_config(
@@ -1016,7 +1113,9 @@ class SaaSService:
                     )
                 ).scalar_one_or_none()
                 if row is None:
-                    raise ValueError("provider config not found")
+                    raise ProviderConfigError(
+                        code="PROVIDER_NOT_FOUND", message="provider config not found"
+                    )
                 provider_type = row.provider_type
                 session.delete(row)
                 session.add(

@@ -1,4 +1,5 @@
 import json
+import logging
 import time
 from dataclasses import asdict, dataclass
 from datetime import date, datetime
@@ -20,8 +21,10 @@ from .models import (
     Tenant,
 )
 from .queue import build_queue
-from .service import AuthError, SaaSService, ServiceConfig
+from .service import AuthError, ProviderConfigError, SaaSService, ServiceConfig
 from .storage import StorageBackend, build_storage
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -151,7 +154,11 @@ def _report_to_dict(row: Report, artifacts: list[ReportArtifact]) -> dict[str, o
 def _provider_to_dict(row: ProviderConfig) -> dict[str, object]:
     try:
         config = json.loads(row.config_json)
-    except Exception:
+    except json.JSONDecodeError:
+        logger.warning(
+            "Failed to decode provider config JSON for provider %s; falling back to empty config.",
+            row.id,
+        )
         config = {}
 
     return {
@@ -237,13 +244,13 @@ def create_app(config: ApiAppConfig | None = None):
         provider_type: str
         display_name: str | None = None
         connection_status: str = "disconnected"
-        config: dict[str, object] | None = None
+        config: object | None = None
 
     class ProviderUpdateRequest(BaseModel):
         provider_type: str | None = None
         display_name: str | None = None
         connection_status: str | None = None
-        config: dict[str, object] | None = None
+        config: object | None = None
         token_expires_at: datetime | None = None
         last_successful_sync_at: datetime | None = None
         last_error_code: str | None = None
@@ -298,6 +305,14 @@ def create_app(config: ApiAppConfig | None = None):
                 }
             },
         )
+
+    def _provider_http_exception(exc: ProviderConfigError) -> HTTPException:
+        status_by_code = {
+            "PROVIDER_NOT_FOUND": 404,
+            "PROVIDER_CONFLICT": 409,
+            "PROVIDER_VALIDATION_ERROR": 400,
+        }
+        return HTTPException(status_code=status_by_code.get(exc.code, 400), detail=exc.message)
 
     def _set_refresh_cookie(response: Response, refresh_token: str) -> None:
         response.set_cookie(
@@ -582,11 +597,8 @@ def create_app(config: ApiAppConfig | None = None):
                 config=payload.config,
                 actor=actor,
             )
-        except ValueError as exc:
-            message = str(exc)
-            if "already exists" in message:
-                raise HTTPException(status_code=409, detail=message) from exc
-            raise HTTPException(status_code=400, detail=message) from exc
+        except ProviderConfigError as exc:
+            raise _provider_http_exception(exc) from exc
         return _provider_to_dict(item)
 
     @app.patch("/v1/providers/{provider_id}")
@@ -607,13 +619,8 @@ def create_app(config: ApiAppConfig | None = None):
                 updates=updates,
                 actor=actor,
             )
-        except ValueError as exc:
-            message = str(exc)
-            if message == "provider config not found":
-                raise HTTPException(status_code=404, detail=message) from exc
-            if "already exists" in message:
-                raise HTTPException(status_code=409, detail=message) from exc
-            raise HTTPException(status_code=400, detail=message) from exc
+        except ProviderConfigError as exc:
+            raise _provider_http_exception(exc) from exc
         return _provider_to_dict(item)
 
     @app.delete("/v1/providers/{provider_id}", status_code=204)
@@ -627,8 +634,8 @@ def create_app(config: ApiAppConfig | None = None):
             service.delete_provider_config(
                 tenant_id=tenant_id, provider_id=provider_id, actor=actor
             )
-        except ValueError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ProviderConfigError as exc:
+            raise _provider_http_exception(exc) from exc
         return Response(status_code=204)
 
     @app.get("/dashboard", include_in_schema=False)
