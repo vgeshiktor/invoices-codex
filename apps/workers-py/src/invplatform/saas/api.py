@@ -187,7 +187,7 @@ def create_app(config: ApiAppConfig | None = None):
             RedirectResponse,
         )
         from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
-        from pydantic import BaseModel
+        from pydantic import BaseModel, ConfigDict
     except ModuleNotFoundError as exc:  # pragma: no cover - environment dependent
         raise RuntimeError(
             "FastAPI stack is not installed. Install fastapi and uvicorn to run the SaaS API."
@@ -226,6 +226,7 @@ def create_app(config: ApiAppConfig | None = None):
         last_successful_sync_at: datetime | None = None
         last_error_code: str | None = None
         last_error_message: str | None = None
+        model_config = ConfigDict(extra="allow")
 
     class ReportRequest(BaseModel):
         parse_job_ids: list[str] | None = None

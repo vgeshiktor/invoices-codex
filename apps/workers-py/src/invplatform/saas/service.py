@@ -853,7 +853,21 @@ class SaaSService:
                         ),
                     )
                 )
-                session.commit()
+                try:
+                    session.commit()
+                except IntegrityError:
+                    session.rollback()
+                    existing = session.execute(
+                        select(ProviderConfig).where(
+                            ProviderConfig.tenant_id == tenant_id,
+                            ProviderConfig.provider_type == normalized_provider_type,
+                        )
+                    ).scalar_one_or_none()
+                    if existing is not None:
+                        raise ValueError(
+                            f"provider {normalized_provider_type} already configured for tenant"
+                        )
+                    raise
                 session.refresh(provider)
                 return provider
 

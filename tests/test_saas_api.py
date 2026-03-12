@@ -409,6 +409,13 @@ def test_provider_endpoints_validation_errors(tmp_path: Path) -> None:
     )
     assert invalid_status.status_code == 400
 
+    unknown_field = client.patch(
+        f"/v1/providers/{provider_id}",
+        headers=headers,
+        json={"display_name": "ok", "display_nam_typo": "bad"},
+    )
+    assert unknown_field.status_code == 400
+
 
 def test_control_plane_tenant_bootstrap_and_listing(tmp_path: Path) -> None:
     client, _api_key, _tenant_id = _client(
