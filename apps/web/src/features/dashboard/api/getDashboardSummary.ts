@@ -15,19 +15,26 @@ export type DashboardSummaryResult =
     };
 
 export const getDashboardSummary = async (): Promise<DashboardSummaryResult> => {
-  const result = await dashboardSummaryV1DashboardSummaryGet({
-    client: apiClient,
-  });
+  try {
+    const result = await dashboardSummaryV1DashboardSummaryGet({
+      client: apiClient,
+    });
 
-  if (result.error !== undefined) {
+    if (result.error !== undefined) {
+      return {
+        ok: false,
+        error: normalizeApiError(result.error, result.response),
+      };
+    }
+
+    return {
+      ok: true,
+      data: result.data ?? null,
+    };
+  } catch (error) {
     return {
       ok: false,
-      error: normalizeApiError(result.error, result.response),
+      error: normalizeApiError(error),
     };
   }
-
-  return {
-    ok: true,
-    data: result.data ?? null,
-  };
 };
