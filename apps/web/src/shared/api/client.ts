@@ -110,7 +110,8 @@ const timeoutFetch: typeof fetch = async (input, init) => {
     didTimeout = true;
     controller.abort(new DOMException('Request timed out', 'TimeoutError'));
   }, frontendEnv.apiTimeoutMs);
-  const sourceSignal = init?.signal;
+  const requestSignal = input instanceof Request ? input.signal : undefined;
+  const sourceSignal = init?.signal ?? requestSignal;
 
   if (sourceSignal) {
     if (sourceSignal.aborted) {
