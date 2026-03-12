@@ -121,7 +121,7 @@ Recommended Week 1 scripts in `apps/web/package.json`:
 {
   "scripts": {
     "api:generate": "openapi-ts -i ../../integrations/openapi/saas-openapi.v0.1.0.json -o src/shared/api/generated -c @hey-api/client-fetch",
-    "api:check": "npm run api:generate && git diff --exit-code -- src/shared/api/generated"
+    "api:check": "npm run api:generate && (test -z \"$(git status --porcelain --untracked-files=all -- src/shared/api/generated)\" || (echo \"Generated API client drift detected:\" && git status --short --untracked-files=all -- src/shared/api/generated && exit 1))"
   }
 }
 ```

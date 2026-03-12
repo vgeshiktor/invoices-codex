@@ -33,3 +33,38 @@ jobs:
       - name: Python tests
         run: |
           make test COVERAGE_MIN=80
+
+  frontend-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: apps/web
+        run: npm ci
+
+      - name: Frontend generated-client drift check
+        working-directory: apps/web
+        run: npm run api:check
+
+      - name: Frontend lint
+        working-directory: apps/web
+        run: npm run lint
+
+      - name: Frontend typecheck
+        working-directory: apps/web
+        run: npm run typecheck
+
+      - name: Frontend tests
+        working-directory: apps/web
+        run: npm run test
+
+      - name: Frontend build
+        working-directory: apps/web
+        run: npm run build
