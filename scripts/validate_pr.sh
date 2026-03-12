@@ -543,15 +543,14 @@ elif [[ ${#DESIGN_DOCS[@]} -gt 0 ]]; then
     status="PARTIAL"
     evidence_parts=()
     notes=""
-    if [[ -f "$doc" ]]; then
+    if grep -Fxq "$doc" <<<"$FILES_LIST"; then
+      evidence_parts+=("doc changed in PR")
+      status="PASS"
+    elif [[ -f "$doc" ]]; then
       evidence_parts+=("doc exists")
     else
       status="FAIL"
-      evidence_parts+=("doc missing in repo")
-    fi
-    if grep -Fxq "$doc" <<<"$FILES_LIST"; then
-      evidence_parts+=("doc changed in PR")
-      [[ "$status" != "FAIL" ]] && status="PASS"
+      evidence_parts+=("doc missing in repo and not changed in PR")
     fi
     if [[ "$BODY" == *"$doc"* ]]; then
       evidence_parts+=("doc referenced in PR body")
