@@ -270,8 +270,11 @@ def test_openapi_exposes_api_key_security_scheme(tmp_path: Path) -> None:
         == "X-Control-Plane-Key"
     )
     assert "/v1/invoices" in body["paths"]
+    assert "/v1/providers" in body["paths"]
+    assert "/v1/providers/{provider_id}" in body["paths"]
     assert "/v1/control-plane/tenants" in body["paths"]
     assert body["paths"]["/v1/files"]["post"]["security"] == [{"ApiKeyAuth": []}]
+    assert body["paths"]["/v1/providers"]["get"]["security"] == [{"ApiKeyAuth": []}]
     assert body["paths"]["/v1/control-plane/tenants"]["get"]["security"] == [
         {"ControlPlaneKeyAuth": []}
     ]
@@ -308,6 +311,103 @@ def test_admin_api_key_management_and_dashboard_summary(tmp_path: Path) -> None:
     assert "totals" in body
     assert "parse_jobs_by_status" in body
     assert "reports_by_status" in body
+
+
+def test_provider_crud_endpoints_and_tenant_isolation(tmp_path: Path) -> None:
+    client, api_key, _tenant_id = _client(tmp_path)
+    app = cast(Any, client.app)
+    _other_tenant, other_key = app.state.service.bootstrap_tenant("Other Tenant")
+    headers = {"X-API-Key": api_key, "X-Actor": "owner-user"}
+
+    created = client.post(
+        "/v1/providers",
+        headers=headers,
+        json={"provider_type": "gmail", "display_name": "Finance Gmail"},
+    )
+    assert created.status_code == 201
+    created_body = created.json()
+    provider_id = created_body["id"]
+    assert created_body["provider_type"] == "gmail"
+    assert created_body["connection_status"] == "disconnected"
+    assert created_body["display_name"] == "Finance Gmail"
+
+    duplicate = client.post(
+        "/v1/providers",
+        headers=headers,
+        json={"provider_type": "gmail"},
+    )
+    assert duplicate.status_code == 400
+
+    listing = client.get("/v1/providers", headers={"X-API-Key": api_key})
+    assert listing.status_code == 200
+    assert listing.json()["total"] == 1
+
+    listing_other = client.get("/v1/providers", headers={"X-API-Key": other_key})
+    assert listing_other.status_code == 200
+    assert listing_other.json()["total"] == 0
+
+    updated = client.patch(
+        f"/v1/providers/{provider_id}",
+        headers=headers,
+        json={
+            "connection_status": "error",
+            "last_error_code": "OAUTH_REFRESH_FAILED",
+            "last_error_message": "refresh token revoked",
+        },
+    )
+    assert updated.status_code == 200
+    updated_body = updated.json()
+    assert updated_body["connection_status"] == "error"
+    assert updated_body["last_error_code"] == "OAUTH_REFRESH_FAILED"
+    assert updated_body["last_error_message"] == "refresh token revoked"
+
+    cross_tenant_patch = client.patch(
+        f"/v1/providers/{provider_id}",
+        headers={"X-API-Key": other_key},
+        json={"display_name": "Not Allowed"},
+    )
+    assert cross_tenant_patch.status_code == 404
+
+    cross_tenant_delete = client.delete(
+        f"/v1/providers/{provider_id}", headers={"X-API-Key": other_key}
+    )
+    assert cross_tenant_delete.status_code == 404
+
+    deleted = client.delete(f"/v1/providers/{provider_id}", headers=headers)
+    assert deleted.status_code == 204
+    final_listing = client.get("/v1/providers", headers={"X-API-Key": api_key})
+    assert final_listing.status_code == 200
+    assert final_listing.json()["total"] == 0
+
+
+def test_provider_endpoints_validation_errors(tmp_path: Path) -> None:
+    client, api_key, _tenant_id = _client(tmp_path)
+    headers = {"X-API-Key": api_key}
+
+    invalid_provider = client.post(
+        "/v1/providers",
+        headers=headers,
+        json={"provider_type": "imap"},
+    )
+    assert invalid_provider.status_code == 400
+
+    created = client.post(
+        "/v1/providers",
+        headers=headers,
+        json={"provider_type": "outlook"},
+    )
+    assert created.status_code == 201
+    provider_id = created.json()["id"]
+
+    empty_patch = client.patch(f"/v1/providers/{provider_id}", headers=headers, json={})
+    assert empty_patch.status_code == 400
+
+    invalid_status = client.patch(
+        f"/v1/providers/{provider_id}",
+        headers=headers,
+        json={"connection_status": "invalid"},
+    )
+    assert invalid_status.status_code == 400
 
 
 def test_control_plane_tenant_bootstrap_and_listing(tmp_path: Path) -> None:

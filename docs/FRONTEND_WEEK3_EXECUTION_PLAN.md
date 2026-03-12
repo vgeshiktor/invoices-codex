@@ -32,6 +32,8 @@ By end of Week 3:
 
 ## 4. Backend Contract for Week 3 (Freeze Early)
 
+Canonical contract source: `docs/contracts/PROVIDER_WEEK3_CONTRACT.md`.
+
 Provider CRUD endpoints (tenant-scoped):
 - `GET /v1/providers`
 - `POST /v1/providers`

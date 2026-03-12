@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import select
 
 from invplatform.saas.db import TenantGuardError, build_engine, build_session_factory
-from invplatform.saas.models import Base, InvoiceRecord, Tenant
+from invplatform.saas.models import Base, InvoiceRecord, ProviderConfig, Tenant
 
 
 def test_tenant_guard_blocks_tenantless_scoped_select(tmp_path: Path) -> None:
@@ -95,3 +95,44 @@ def test_tenant_guard_auto_filters_by_session_tenant(tmp_path: Path) -> None:
         rows = list(session.execute(select(InvoiceRecord)).scalars().all())
         assert len(rows) == 1
         assert rows[0].vendor == "A"
+
+
+def test_tenant_guard_applies_to_provider_config_model(tmp_path: Path) -> None:
+    engine = build_engine(f"sqlite:///{tmp_path / 'guard3.db'}")
+    Base.metadata.create_all(bind=engine)
+    session_factory = build_session_factory(engine, enforce_tenant_guard=True)
+
+    with session_factory() as session:
+        t1 = Tenant(name="A", slug="a")
+        t2 = Tenant(name="B", slug="b")
+        session.add(t1)
+        session.add(t2)
+        session.flush()
+        tenant_one_id = t1.id
+        session.add(
+            ProviderConfig(
+                tenant_id=t1.id,
+                provider_type="gmail",
+                display_name="A Gmail",
+                connection_status="disconnected",
+            )
+        )
+        session.add(
+            ProviderConfig(
+                tenant_id=t2.id,
+                provider_type="outlook",
+                display_name="B Outlook",
+                connection_status="connected",
+            )
+        )
+        session.commit()
+
+    with session_factory() as session:
+        with pytest.raises(TenantGuardError):
+            session.execute(select(ProviderConfig)).scalars().all()
+
+    with session_factory() as session:
+        session.info["tenant_id"] = tenant_one_id
+        rows = list(session.execute(select(ProviderConfig)).scalars().all())
+        assert len(rows) == 1
+        assert rows[0].display_name == "A Gmail"

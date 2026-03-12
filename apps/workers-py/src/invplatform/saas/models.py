@@ -51,6 +51,17 @@ class ReportStatus(str, Enum):
     FAILED = "failed"
 
 
+class ProviderType(str, Enum):
+    GMAIL = "gmail"
+    OUTLOOK = "outlook"
+
+
+class ProviderConnectionStatus(str, Enum):
+    CONNECTED = "connected"
+    DISCONNECTED = "disconnected"
+    ERROR = "error"
+
+
 class Tenant(Base):
     __tablename__ = "saas_tenants"
 
@@ -146,6 +157,35 @@ class ApiKey(Base):
         DateTime(timezone=True), default=_utcnow, nullable=False
     )
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ProviderConfig(Base):
+    __tablename__ = "saas_provider_configs"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "provider_type", name="uq_saas_provider_configs_tenant_provider"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("saas_tenants.id"), nullable=False, index=True
+    )
+    provider_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    display_name: Mapped[str | None] = mapped_column(String(255))
+    connection_status: Mapped[str] = mapped_column(
+        String(32), default=ProviderConnectionStatus.DISCONNECTED.value, nullable=False, index=True
+    )
+    token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_successful_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error_code: Mapped[str | None] = mapped_column(String(64))
+    last_error_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, nullable=False
+    )
 
 
 class InvoiceFile(Base):

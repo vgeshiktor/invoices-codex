@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 import re
 
@@ -7,7 +8,13 @@ import pytest
 from sqlalchemy import select
 
 from invplatform.saas.db import build_engine, build_session_factory
-from invplatform.saas.models import Base, IdempotencyRecord, ParseJob, Report
+from invplatform.saas.models import (
+    AuditEvent,
+    Base,
+    IdempotencyRecord,
+    ParseJob,
+    Report,
+)
 from invplatform.saas.queue import InMemoryJobQueue
 from invplatform.saas.service import PARSE_JOB_TASK, SaaSService
 
@@ -75,6 +82,119 @@ def test_create_tenant_user_existing_user_requires_password_match(
             password="wrong-pass",
             role="viewer",
         )
+
+
+def test_provider_config_crud_is_tenant_scoped(tmp_path: Path) -> None:
+    service, _queue = _build_service(tmp_path)
+    tenant_a, _ = service.bootstrap_tenant("Tenant A")
+    tenant_b, _ = service.bootstrap_tenant("Tenant B")
+
+    created = service.create_provider_config(
+        tenant_id=tenant_a.id,
+        provider_type="gmail",
+        display_name="Finance Gmail",
+        actor="ops-user",
+    )
+    service.create_provider_config(
+        tenant_id=tenant_b.id,
+        provider_type="gmail",
+        display_name="Other Gmail",
+        actor="ops-user",
+    )
+
+    list_a = service.list_provider_configs(tenant_id=tenant_a.id)
+    assert len(list_a) == 1
+    assert list_a[0].id == created.id
+    assert list_a[0].provider_type == "gmail"
+    assert list_a[0].display_name == "Finance Gmail"
+
+    updated = service.update_provider_config(
+        tenant_id=tenant_a.id,
+        provider_id=created.id,
+        updates={
+            "connection_status": "error",
+            "last_error_code": "OAUTH_REFRESH_FAILED",
+            "last_error_message": "refresh token revoked",
+            "token_expires_at": datetime(2030, 1, 1, tzinfo=timezone.utc),
+        },
+        actor="ops-user",
+    )
+    assert updated.connection_status == "error"
+    assert updated.last_error_code == "OAUTH_REFRESH_FAILED"
+    assert updated.last_error_message == "refresh token revoked"
+    assert updated.token_expires_at is not None
+
+    service.delete_provider_config(
+        tenant_id=tenant_a.id, provider_id=created.id, actor="ops-user"
+    )
+    assert service.list_provider_configs(tenant_id=tenant_a.id) == []
+    assert len(service.list_provider_configs(tenant_id=tenant_b.id)) == 1
+
+    with service.session_factory() as session:
+        session.info["disable_tenant_guard"] = True
+        events = list(
+            session.execute(
+                select(AuditEvent)
+                .where(AuditEvent.tenant_id == tenant_a.id)
+                .order_by(AuditEvent.created_at.asc())
+            )
+            .scalars()
+            .all()
+        )
+        event_types = [item.event_type for item in events]
+        assert "provider.create" in event_types
+        assert "provider.update" in event_types
+        assert "provider.delete" in event_types
+
+
+def test_provider_config_rejects_invalid_updates_and_cross_tenant_access(
+    tmp_path: Path,
+) -> None:
+    service, _queue = _build_service(tmp_path)
+    tenant_a, _ = service.bootstrap_tenant("Tenant A")
+    tenant_b, _ = service.bootstrap_tenant("Tenant B")
+    created = service.create_provider_config(
+        tenant_id=tenant_a.id,
+        provider_type="outlook",
+        display_name="Ops Outlook",
+    )
+
+    with pytest.raises(ValueError, match="provider_type must be one of"):
+        service.create_provider_config(tenant_id=tenant_a.id, provider_type="imap")
+
+    with pytest.raises(ValueError, match="already configured"):
+        service.create_provider_config(tenant_id=tenant_a.id, provider_type="outlook")
+
+    with pytest.raises(ValueError, match="at least one field must be provided"):
+        service.update_provider_config(
+            tenant_id=tenant_a.id,
+            provider_id=created.id,
+            updates={},
+        )
+
+    with pytest.raises(ValueError, match="unsupported fields"):
+        service.update_provider_config(
+            tenant_id=tenant_a.id,
+            provider_id=created.id,
+            updates={"unexpected_field": "value"},
+        )
+
+    with pytest.raises(ValueError, match="connection_status must be one of"):
+        service.update_provider_config(
+            tenant_id=tenant_a.id,
+            provider_id=created.id,
+            updates={"connection_status": "broken"},
+        )
+
+    with pytest.raises(LookupError, match="provider not found"):
+        service.update_provider_config(
+            tenant_id=tenant_b.id,
+            provider_id=created.id,
+            updates={"display_name": "hijack"},
+        )
+
+    with pytest.raises(LookupError, match="provider not found"):
+        service.delete_provider_config(tenant_id=tenant_b.id, provider_id=created.id)
 
 
 def test_register_file_and_create_parse_job_enqueues_task(tmp_path: Path) -> None:

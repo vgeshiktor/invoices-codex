@@ -37,4 +37,5 @@ def test_export_writes_openapi_snapshot(
     assert body["info"]["title"] == "Invoices SaaS API"
     assert body["info"]["version"] == "0.1.0"
     assert "/v1/dashboard/summary" in body["paths"]
+    assert "/v1/providers" in body["paths"]
     assert body["components"]["securitySchemes"]["ApiKeyAuth"]["type"] == "apiKey"

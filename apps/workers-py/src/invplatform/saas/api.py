@@ -3,13 +3,23 @@ import time
 from dataclasses import asdict, dataclass
 from datetime import date, datetime
 from pathlib import Path
+from typing import cast
 from uuid import uuid4
 
 from sqlalchemy.orm import Session, sessionmaker
 
 from .db import build_engine, build_session_factory
 from .metrics import MetricsRegistry
-from .models import ApiKey, Base, InvoiceRecord, ParseJob, Report, ReportArtifact, Tenant
+from .models import (
+    ApiKey,
+    Base,
+    InvoiceRecord,
+    ParseJob,
+    ProviderConfig,
+    Report,
+    ReportArtifact,
+    Tenant,
+)
 from .queue import build_queue
 from .service import AuthError, SaaSService, ServiceConfig
 from .storage import StorageBackend, build_storage
@@ -72,6 +82,22 @@ def _job_to_dict(job: ParseJob) -> dict[str, object]:
         "created_at": _iso(job.created_at),
         "started_at": _iso(job.started_at),
         "finished_at": _iso(job.finished_at),
+    }
+
+
+def _provider_to_dict(row: ProviderConfig) -> dict[str, object]:
+    return {
+        "id": row.id,
+        "tenant_id": row.tenant_id,
+        "provider_type": row.provider_type,
+        "display_name": row.display_name,
+        "connection_status": row.connection_status,
+        "token_expires_at": _iso(row.token_expires_at),
+        "last_successful_sync_at": _iso(row.last_successful_sync_at),
+        "last_error_code": row.last_error_code,
+        "last_error_message": row.last_error_message,
+        "created_at": _iso(row.created_at),
+        "updated_at": _iso(row.updated_at),
     }
 
 
@@ -189,6 +215,18 @@ def create_app(config: ApiAppConfig | None = None):
         file_ids: list[str]
         debug: bool = False
 
+    class ProviderCreateRequest(BaseModel):
+        provider_type: str
+        display_name: str | None = None
+
+    class ProviderPatchRequest(BaseModel):
+        display_name: str | None = None
+        connection_status: str | None = None
+        token_expires_at: datetime | None = None
+        last_successful_sync_at: datetime | None = None
+        last_error_code: str | None = None
+        last_error_message: str | None = None
+
     class ReportRequest(BaseModel):
         parse_job_ids: list[str] | None = None
         formats: list[str] | None = None
@@ -213,6 +251,11 @@ def create_app(config: ApiAppConfig | None = None):
 
     def get_actor(x_actor: str | None = Header(default=None, alias="X-Actor")) -> str | None:
         return x_actor
+
+    def _model_dump_exclude_unset(model: BaseModel) -> dict[str, object]:
+        if hasattr(model, "model_dump"):
+            return cast(dict[str, object], model.model_dump(exclude_unset=True))
+        return cast(dict[str, object], model.dict(exclude_unset=True))
 
     api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False, scheme_name="ApiKeyAuth")
     bearer_header = HTTPBearer(auto_error=False, scheme_name="BearerAuth")
@@ -670,6 +713,73 @@ def create_app(config: ApiAppConfig | None = None):
         if invoice is None:
             raise HTTPException(status_code=404, detail="invoice not found")
         return _invoice_to_dict(invoice)
+
+    @app.get("/v1/providers")
+    def list_providers(
+        tenant_id: str = Depends(get_tenant_id),
+        service: SaaSService = Depends(get_service),
+    ) -> dict[str, object]:
+        items = service.list_provider_configs(tenant_id=tenant_id)
+        return {"items": [_provider_to_dict(item) for item in items], "total": len(items)}
+
+    @app.post("/v1/providers", status_code=201)
+    def create_provider(
+        request: ProviderCreateRequest,
+        tenant_id: str = Depends(get_tenant_id),
+        actor: str | None = Depends(get_actor),
+        service: SaaSService = Depends(get_service),
+    ) -> dict[str, object]:
+        try:
+            item = service.create_provider_config(
+                tenant_id=tenant_id,
+                provider_type=request.provider_type,
+                display_name=request.display_name,
+                actor=actor,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _provider_to_dict(item)
+
+    @app.patch("/v1/providers/{provider_id}")
+    def update_provider(
+        provider_id: str,
+        request: ProviderPatchRequest,
+        tenant_id: str = Depends(get_tenant_id),
+        actor: str | None = Depends(get_actor),
+        service: SaaSService = Depends(get_service),
+    ) -> dict[str, object]:
+        updates = _model_dump_exclude_unset(request)
+        if not updates:
+            raise HTTPException(status_code=400, detail="at least one field must be provided")
+        try:
+            item = service.update_provider_config(
+                tenant_id=tenant_id,
+                provider_id=provider_id,
+                updates=updates,
+                actor=actor,
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _provider_to_dict(item)
+
+    @app.delete("/v1/providers/{provider_id}", status_code=204)
+    def delete_provider(
+        provider_id: str,
+        tenant_id: str = Depends(get_tenant_id),
+        actor: str | None = Depends(get_actor),
+        service: SaaSService = Depends(get_service),
+    ) -> Response:
+        try:
+            service.delete_provider_config(
+                tenant_id=tenant_id,
+                provider_id=provider_id,
+                actor=actor,
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return Response(status_code=204)
 
     @app.get("/v1/control-plane/tenants")
     def list_control_plane_tenants(
