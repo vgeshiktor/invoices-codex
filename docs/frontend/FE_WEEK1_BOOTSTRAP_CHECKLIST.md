@@ -112,7 +112,8 @@ apps/web/
 ## 5. Day 1 Execution Command Sequence (planned, not executed on Day 0)
 
 ```bash
-cd /Users/vadimgeshiktor/repos/github.com/vgeshiktor/python-projects/invoices-codex
+# run from repository root (replace with your local checkout path if needed)
+cd <repo-root>
 npm create vite@latest apps/web -- --template react-ts
 cd apps/web
 npm install
