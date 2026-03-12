@@ -34,6 +34,10 @@ By end of Week 10:
 Testing pyramid in CI:
 - required suites: unit + integration + e2e
 - each suite has required status checks on PRs
+- FE-701 required check names:
+  - `frontend / unit`
+  - `frontend / integration`
+  - `frontend / e2e`
 
 Coverage contract:
 - minimum frontend coverage threshold: `80%`
@@ -155,7 +159,10 @@ Week-level DoD:
 ## 8. Test and Verification Matrix (Minimum)
 
 - CI checks:
-  - unit/integration/e2e all required
+  - required pyramid checks:
+    - `frontend / unit`
+    - `frontend / integration`
+    - `frontend / e2e`
   - coverage threshold >=80% enforced
   - a11y checks enforced on critical routes
   - performance budget checks enforced
