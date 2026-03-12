@@ -1,15 +1,26 @@
-import sys
-from pathlib import Path
-
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-SRC_DIR = REPO_ROOT / "apps" / "workers-py" / "src"
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
+from invplatform.usecases import report_totals as totals_uc
+from invplatform.usecases import report_vendor_strategies as vendor_uc
 
-from invplatform.usecases import report_totals as totals_uc  # noqa: E402
-from invplatform.usecases import report_vendor_strategies as vendor_uc  # noqa: E402
+VAT_BEFORE_MARKER = 'מ"עמ ינפל'
+VAT_MARKER = 'מע"מ'
+TOTAL_MARKER = 'סה"כ'
+INCLUDING_MARKER = "כולל"
+MUNICIPAL_ARNONA = "ארנונה"
+STINGTV_BREAKDOWN_MARKER = "ןובשחה טוריפ"
+STINGTV_BREAKDOWN_END_MARKER = "עצבמב לולכ"
+REVERSED_DETAILS_MARKER = ":םיטרפ"
+
+PARTNER_PERIOD_DETAILS = "פירוט חיובים וזיכויים לתקופת החשבון"
+PARTNER_ACCOUNT_CHARGES_TOTAL = 'סה"כ חיובי החשבון'
+
+PETAH_TIKVA_MUNICIPALITY = "עיריית פתח תקווה"
+PARTNER_VENDOR = 'חברת פרטנר תקשורת בע"מ'
+KEREN_VENDOR = "קרן-מדריכת הורים ותינוקות"
+
+ARNONA_BUSINESS = "ארנונה לעסקים"
+ARNONA_GENERIC = "ארנונה"
 
 
 def test_report_totals_normalize_parse_and_select_edge_cases():
@@ -30,11 +41,11 @@ def test_report_totals_numeric_and_amount_helpers_cover_percent_and_integer_fall
 
     lines = [
         "header",
-        'מ"עמ ינפל 18%',
+        f"{VAT_BEFORE_MARKER} 18%",
         "100.00",
         "neighbor 50% and 42",
     ]
-    values = totals_uc.numeric_values_near_marker(lines, 'מ"עמ ינפל', window=2)
+    values = totals_uc.numeric_values_near_marker(lines, VAT_BEFORE_MARKER, window=2)
     assert 100.0 in values
     assert 18.0 not in values
     assert 50.0 not in values
@@ -49,19 +60,19 @@ def test_report_totals_repeated_currency_and_marker_window_paths():
     assert totals_uc.repeated_currency_total(["12", "20"]) == pytest.approx(20.0)
     assert totals_uc.repeated_currency_total(["49", "55"]) == pytest.approx(55.0)
 
-    lines_with_window_amount = ['סה"כ', 'מע"מ', "כולל", "120"]
+    lines_with_window_amount = [TOTAL_MARKER, VAT_MARKER, INCLUDING_MARKER, "120"]
     assert totals_uc.extract_total_from_total_with_vat_lines(
         lines_with_window_amount, []
     ) == pytest.approx(120.0)
 
-    lines_without_window_amount = ['סה"כ', 'מע"מ', "כולל", "---"]
+    lines_without_window_amount = [TOTAL_MARKER, VAT_MARKER, INCLUDING_MARKER, "---"]
     assert totals_uc.extract_total_from_total_with_vat_lines(
         lines_without_window_amount, ["60", "60"]
     ) == pytest.approx(60.0)
 
 
 def test_report_totals_extract_vat_from_percent_lines_paths():
-    direct_line = ['מע"מ 17.00 18%']
+    direct_line = [f"{VAT_MARKER} 17.00 18%"]
     assert totals_uc.extract_vat_from_percent_lines(
         direct_line,
         [],
@@ -69,7 +80,7 @@ def test_report_totals_extract_vat_from_percent_lines_paths():
         explicit_vat_rate=None,
     ) == pytest.approx(17.0)
 
-    next_line = ['מע"מ 18%', "17.00"]
+    next_line = [f"{VAT_MARKER} 18%", "17.00"]
     assert totals_uc.extract_vat_from_percent_lines(
         next_line,
         [],
@@ -77,7 +88,7 @@ def test_report_totals_extract_vat_from_percent_lines_paths():
         explicit_vat_rate=None,
     ) == pytest.approx(17.0)
 
-    rate_from_percent = ['מע"מ 18%']
+    rate_from_percent = [f"{VAT_MARKER} 18%"]
     assert totals_uc.extract_vat_from_percent_lines(
         rate_from_percent,
         ["100.00", "18.00", "200.00"],
@@ -88,7 +99,7 @@ def test_report_totals_extract_vat_from_percent_lines_paths():
     # Candidate exists but implied rate is too far from target rate (>1.0).
     assert (
         totals_uc.extract_vat_from_percent_lines(
-            ['מע"מ 10%'],
+            [f"{VAT_MARKER} 10%"],
             ["18.00"],
             total=118.0,
             explicit_vat_rate=None,
@@ -120,7 +131,7 @@ def test_report_totals_find_amount_before_marker_and_rate_helpers():
 
 
 def test_report_totals_infer_totals_uses_marker_total_and_currency_difference():
-    lines = ['סה"כ מע"מ כולל 1,200.00']
+    lines = [f"{TOTAL_MARKER} {VAT_MARKER} {INCLUDING_MARKER} 1,200.00"]
     text = """
     סה"כ יגבה: 1 200.00
     ₪ 1,200.00
@@ -133,7 +144,7 @@ def test_report_totals_infer_totals_uses_marker_total_and_currency_difference():
 
 def test_report_totals_infer_totals_prefers_stingtv_breakdown_for_municipal_text():
     lines = ["irrelevant"]
-    text = "ארנונה ןובשחה טוריפ 10 20 5 עצבמב לולכ"
+    text = f"{MUNICIPAL_ARNONA} {STINGTV_BREAKDOWN_MARKER} 10 20 5 {STINGTV_BREAKDOWN_END_MARKER}"
     totals = totals_uc.infer_totals(lines, text)
     assert totals["municipal"] is True
     assert totals["breakdown_values"] == [10.0, 20.0, 5.0]
@@ -150,9 +161,10 @@ def test_vendor_strategies_normalization_and_detection_edge_cases():
 
     assert vendor_uc.normalize_invoice_for_value("1234") is None
     assert (
-        vendor_uc.normalize_invoice_for_value("ארנונה לעסקים נכס 7") == "ארנונה לעסקים"
+        vendor_uc.normalize_invoice_for_value(f"{ARNONA_BUSINESS} נכס 7")
+        == ARNONA_BUSINESS
     )
-    assert vendor_uc.normalize_invoice_for_value("ארנונה כללית") == "ארנונה"
+    assert vendor_uc.normalize_invoice_for_value("ארנונה כללית") == ARNONA_GENERIC
 
     assert vendor_uc.detect_known_vendor(None) is None
     assert vendor_uc.has_public_transport_marker("rav kav טעינה")
@@ -163,11 +175,11 @@ def test_vendor_strategies_normalization_and_detection_edge_cases():
 def test_vendor_strategies_infer_invoice_from_multiple_branches():
     assert (
         vendor_uc.infer_invoice_from(['חברת דוגמה בע"מ'], "פרטנר שירותים")
-        == 'חברת פרטנר תקשורת בע"מ'
+        == PARTNER_VENDOR
     )
     assert (
         vendor_uc.infer_invoice_from(["first line"], "קרן מדריכת הורים ותינוקות שירות")
-        == "קרן-מדריכת הורים ותינוקות"
+        == KEREN_VENDOR
     )
     assert (
         vendor_uc.infer_invoice_from(["first line"], "מאת ספק כלשהו: לכבוד לקוח")
@@ -179,33 +191,31 @@ def test_vendor_strategies_infer_invoice_from_multiple_branches():
     )
     assert (
         vendor_uc.infer_invoice_from(["first line"], "הווקת חתפ רשות מקומית")
-        == "עיריית פתח תקווה"
+        == PETAH_TIKVA_MUNICIPALITY
     )
 
 
 def test_vendor_strategies_partner_ofek_stingtv_and_just_simple_paths():
-    header_only_lines = ["פירוט חיובים וזיכויים לתקופת החשבון", 'סה"כ']
+    header_only_lines = [PARTNER_PERIOD_DETAILS, TOTAL_MARKER]
     assert (
         vendor_uc.extract_partner_invoice_for(header_only_lines)
-        == "פירוט חיובים וזיכויים לתקופת החשבון"
+        == PARTNER_PERIOD_DETAILS
     )
 
     raw_segment = (
-        "פירוט חיובים וזיכויים לתקופת החשבון 2מנויי סלולר "
+        f"{PARTNER_PERIOD_DETAILS} 2מנויי סלולר "
         "1מנוי תמסורת 123-456 תנועות כלליות בחשבון הלקוח "
-        'סה"כ חיובי החשבון'
+        f"{PARTNER_ACCOUNT_CHARGES_TOTAL}"
     )
     assert (
         vendor_uc.extract_partner_invoice_for([], raw_segment)
         == "2 מנויי סלולר | 1 מנוי תמסורת 123-456 | תנועות כלליות בחשבון הלקוח"
     )
 
-    empty_segment = (
-        "פירוט חיובים וזיכויים לתקופת החשבון טקסט חופשי ללא ממצאים " 'סה"כ חיובי החשבון'
-    )
+    empty_segment = f"{PARTNER_PERIOD_DETAILS} טקסט חופשי ללא ממצאים {PARTNER_ACCOUNT_CHARGES_TOTAL}"
     assert (
         vendor_uc.extract_partner_invoice_for([], empty_segment)
-        == "פירוט חיובים וזיכויים לתקופת החשבון"
+        == PARTNER_PERIOD_DETAILS
     )
 
     assert (
@@ -228,7 +238,12 @@ def test_vendor_strategies_partner_ofek_stingtv_and_just_simple_paths():
 
 
 def test_vendor_strategies_infer_invoice_for_fallback_routes():
-    details_marker_lines = [":םיטרפ", "תיאור שירות", "מסלול חודשי", 'סה"כ']
+    details_marker_lines = [
+        REVERSED_DETAILS_MARKER,
+        "תיאור שירות",
+        "מסלול חודשי",
+        TOTAL_MARKER,
+    ]
     assert (
         vendor_uc.infer_invoice_for(details_marker_lines, None)
         == "תיאור שירות | מסלול חודשי"
@@ -249,5 +264,5 @@ def test_vendor_strategies_infer_invoice_for_fallback_routes():
         vendor_uc.infer_invoice_for(time_range_lines, None) == "חיוב עבור שירות - חודשי"
     )
 
-    assert vendor_uc.infer_invoice_for(["x"], "ארנונה לעסקים מס 7") == "ארנונה לעסקים"
-    assert vendor_uc.infer_invoice_for(["x"], "ארנונה כללית") == "ארנונה"
+    assert vendor_uc.infer_invoice_for(["x"], "ארנונה לעסקים מס 7") == ARNONA_BUSINESS
+    assert vendor_uc.infer_invoice_for(["x"], "ארנונה כללית") == ARNONA_GENERIC
