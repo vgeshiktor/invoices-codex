@@ -19,7 +19,7 @@ Repository: vgeshiktor/invoices-codex
 | 2 | PR summary follows documentation guidelines | PASS | Required sections found: problem, design, testing, rollout/risk. |
 | 3 | Commit messages follow naming convention | PASS | All commit headlines match convention. |
 | 4 | Reviewer guide exists and is actionable | PASS | Reviewer guide section found. |
-| 5 | File-level changes are scoped/aligned | PASS | Changed files: 6. Top files: .github/workflows/ci.yml (+35/-0);apps/web/package-lock.json (+345/-1);apps/web/package.json (+3/-1);apps/web/src/shared/utils/serialization.test.ts (+22/-0);docs/frontend/FE_OPENAPI_CLIENT_PLAN.md (+1/-1);docs/qa/PR_TRACEABILITY_RULES_TEMPLATE.json (+28/-51) |
+| 5 | File-level changes are scoped/aligned | PASS | Changed files: 7. Top files: .github/workflows/ci.yml (+35/-0);apps/web/package-lock.json (+345/-1);apps/web/package.json (+3/-1);apps/web/src/shared/utils/serialization.test.ts (+22/-0);docs/frontend/FE_OPENAPI_CLIENT_PLAN.md (+1/-1);docs/qa/PR_57_VALIDATION_REPORT.md (+83/-0);docs/qa/PR_TRACEABILITY_RULES_TEMPLATE.json (+28/-51) |
 | 6 | Linked issues are correct | PASS | No unexpected linked issues. |
 | 7 | Linked issues are complete | PASS | All expected issues are linked. |
 | 8 | Sourcery review findings resolved | N/A | No Sourcery review threads found. |
