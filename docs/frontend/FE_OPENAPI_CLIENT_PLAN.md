@@ -121,10 +121,12 @@ Recommended Week 1 scripts in `apps/web/package.json`:
 {
   "scripts": {
     "api:generate": "openapi-ts -i ../../integrations/openapi/saas-openapi.v0.1.0.json -o src/shared/api/generated -c @hey-api/client-fetch",
-    "api:check": "npm run api:generate && git diff --exit-code -- src/shared/api/generated"
+    "api:check": "npm run api:generate && ./scripts/check-api-drift.sh"
   }
 }
 ```
+
+`apps/web/scripts/check-api-drift.sh` is the single drift-check implementation and fails on both tracked and untracked generated changes.
 
 CI usage (Week 1 / `FE-007`):
 
