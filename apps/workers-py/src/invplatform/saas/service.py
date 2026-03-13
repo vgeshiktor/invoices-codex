@@ -4,6 +4,7 @@ from contextlib import contextmanager
 import hashlib
 import json
 import secrets
+import re
 from datetime import date
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
@@ -19,6 +20,8 @@ from .models import (
     ApiKey,
     AuthSession,
     AuditEvent,
+    CollectionJob,
+    CollectionJobStatus,
     FileStatus,
     IdempotencyRecord,
     InvoiceFile,
@@ -47,6 +50,10 @@ _PROVIDER_OAUTH_STATE_EXPIRES_AT_KEY = "_oauth_state_expires_at"
 _PROVIDER_OAUTH_REDIRECT_URI_KEY = "_oauth_redirect_uri"
 _PROVIDER_OAUTH_STATE_TTL_SECONDS = 10 * 60
 _PROVIDER_ACCESS_TOKEN_TTL_SECONDS = 60 * 60
+_COLLECTION_ALLOWED_STATUSES = {
+    status.value for status in CollectionJobStatus
+}
+_MONTH_SCOPE_PATTERN = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
 
 def _utcnow() -> datetime:
@@ -95,6 +102,13 @@ class AuthError(RuntimeError):
 
 
 class ProviderConfigError(ValueError):
+    def __init__(self, *, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+class CollectionJobError(ValueError):
     def __init__(self, *, code: str, message: str):
         super().__init__(message)
         self.code = code
@@ -179,6 +193,25 @@ class SaaSService:
             return None
         return session.execute(
             select(Report).where(Report.tenant_id == tenant_id, Report.id == record.resource_id)
+        ).scalar_one_or_none()
+
+    def _resolve_idempotent_collection_job(
+        self, session: Session, tenant_id: str, idempotency_key: str
+    ) -> CollectionJob | None:
+        record = session.execute(
+            select(IdempotencyRecord).where(
+                IdempotencyRecord.tenant_id == tenant_id,
+                IdempotencyRecord.scope == "collection_jobs.create",
+                IdempotencyRecord.idempotency_key == idempotency_key,
+            )
+        ).scalar_one_or_none()
+        if record is None:
+            return None
+        return session.execute(
+            select(CollectionJob).where(
+                CollectionJob.tenant_id == tenant_id,
+                CollectionJob.id == record.resource_id,
+            )
         ).scalar_one_or_none()
 
     def _next_unique_tenant_slug(self, session: Session, name: str) -> str:
@@ -287,6 +320,64 @@ class SaaSService:
             raise ProviderConfigError(
                 code="PROVIDER_VALIDATION_ERROR",
                 message=f"connection_status must be one of: {allowed}",
+            )
+        return normalized
+
+    def _normalize_collection_status(self, status: object) -> str:
+        if not isinstance(status, str):
+            raise CollectionJobError(
+                code="COLLECTION_VALIDATION_ERROR", message="status must be a string"
+            )
+        normalized = status.strip().lower()
+        if normalized not in _COLLECTION_ALLOWED_STATUSES:
+            allowed = ", ".join(sorted(_COLLECTION_ALLOWED_STATUSES))
+            raise CollectionJobError(
+                code="COLLECTION_VALIDATION_ERROR",
+                message=f"status must be one of: {allowed}",
+            )
+        return normalized
+
+    def _normalize_collection_month_scope(self, month_scope: object) -> str:
+        if not isinstance(month_scope, str):
+            raise CollectionJobError(
+                code="COLLECTION_VALIDATION_ERROR", message="month_scope must be a string"
+            )
+        normalized = month_scope.strip()
+        if not _MONTH_SCOPE_PATTERN.match(normalized):
+            raise CollectionJobError(
+                code="COLLECTION_VALIDATION_ERROR",
+                message="month_scope must match YYYY-MM",
+            )
+        return normalized
+
+    def _normalize_collection_providers(self, providers: object) -> list[str]:
+        if not isinstance(providers, list) or not providers:
+            raise CollectionJobError(
+                code="COLLECTION_VALIDATION_ERROR",
+                message="providers must be a non-empty list",
+            )
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for raw_provider in providers:
+            if not isinstance(raw_provider, str):
+                raise CollectionJobError(
+                    code="COLLECTION_VALIDATION_ERROR",
+                    message="provider entries must be strings",
+                )
+            provider = raw_provider.strip().lower()
+            if provider not in _PROVIDER_ALLOWED_TYPES:
+                allowed = ", ".join(sorted(_PROVIDER_ALLOWED_TYPES))
+                raise CollectionJobError(
+                    code="COLLECTION_VALIDATION_ERROR",
+                    message=f"providers must only contain: {allowed}",
+                )
+            if provider not in seen:
+                seen.add(provider)
+                normalized.append(provider)
+        if not normalized:
+            raise CollectionJobError(
+                code="COLLECTION_VALIDATION_ERROR",
+                message="providers must be a non-empty list",
             )
         return normalized
 
@@ -1282,6 +1373,129 @@ class SaaSService:
                     )
                 )
                 session.commit()
+
+    def create_collection_job(
+        self,
+        tenant_id: str,
+        *,
+        providers: list[str],
+        month_scope: str,
+        idempotency_key: str | None = None,
+        actor: str | None = None,
+    ) -> CollectionJob:
+        normalized_providers = self._normalize_collection_providers(providers)
+        normalized_month_scope = self._normalize_collection_month_scope(month_scope)
+        normalized_key = (idempotency_key or "").strip() or None
+
+        with self.session_factory() as session:
+            with self._tenant_scope(session, tenant_id):
+                if normalized_key is not None:
+                    existing = self._resolve_idempotent_collection_job(
+                        session, tenant_id, normalized_key
+                    )
+                    if existing is not None:
+                        return existing
+
+                row = CollectionJob(
+                    tenant_id=tenant_id,
+                    status=CollectionJobStatus.QUEUED.value,
+                    idempotency_key=normalized_key,
+                    providers_json=json.dumps(normalized_providers),
+                    month_scope=normalized_month_scope,
+                    parse_job_ids_json="[]",
+                    files_discovered=0,
+                    files_downloaded=0,
+                )
+                session.add(row)
+                session.flush()
+
+                if normalized_key is not None:
+                    session.add(
+                        IdempotencyRecord(
+                            tenant_id=tenant_id,
+                            scope="collection_jobs.create",
+                            idempotency_key=normalized_key,
+                            resource_type="collection_job",
+                            resource_id=row.id,
+                        )
+                    )
+                session.add(
+                    AuditEvent(
+                        tenant_id=tenant_id,
+                        event_type="collection_job.create",
+                        actor=actor,
+                        payload_json=json.dumps(
+                            {
+                                "collection_job_id": row.id,
+                                "providers": normalized_providers,
+                                "month_scope": normalized_month_scope,
+                                "status": row.status,
+                                "idempotency_key": normalized_key,
+                            }
+                        ),
+                    )
+                )
+                try:
+                    session.commit()
+                except IntegrityError:
+                    session.rollback()
+                    if normalized_key is None:
+                        raise
+                    existing = self._resolve_idempotent_collection_job(
+                        session, tenant_id, normalized_key
+                    )
+                    if existing is None:
+                        raise
+                    return existing
+                session.refresh(row)
+                return row
+
+    def list_collection_jobs(
+        self,
+        tenant_id: str,
+        *,
+        status: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[CollectionJob], int]:
+        if limit < 1:
+            raise CollectionJobError(
+                code="COLLECTION_VALIDATION_ERROR", message="limit must be >= 1"
+            )
+        if offset < 0:
+            raise CollectionJobError(
+                code="COLLECTION_VALIDATION_ERROR", message="offset must be >= 0"
+            )
+
+        normalized_status = self._normalize_collection_status(status) if status else None
+
+        with self.session_factory() as session:
+            with self._tenant_scope(session, tenant_id):
+                repo = TenantScopedRepository(session, tenant_id)
+                filters: list[object] = []
+                if normalized_status is not None:
+                    filters.append(CollectionJob.status == normalized_status)
+                total = repo.count(CollectionJob, *filters)
+                items = cast(
+                    list[CollectionJob],
+                    repo.list(
+                        CollectionJob,
+                        *filters,
+                        order_by=[CollectionJob.created_at.desc(), CollectionJob.id.desc()],
+                        limit=limit,
+                        offset=offset,
+                    ),
+                )
+                return items, total
+
+    def get_collection_job(self, tenant_id: str, collection_job_id: str) -> CollectionJob | None:
+        with self.session_factory() as session:
+            with self._tenant_scope(session, tenant_id):
+                repo = TenantScopedRepository(session, tenant_id)
+                return cast(
+                    CollectionJob | None,
+                    repo.one_or_none(CollectionJob, CollectionJob.id == collection_job_id),
+                )
 
     def start_provider_oauth(
         self,

@@ -12,13 +12,19 @@ from invplatform.saas.db import build_engine, build_session_factory
 from invplatform.saas.models import (
     AuditEvent,
     Base,
+    CollectionJob,
     IdempotencyRecord,
     ParseJob,
     ProviderConfig,
     Report,
 )
 from invplatform.saas.queue import InMemoryJobQueue
-from invplatform.saas.service import PARSE_JOB_TASK, ProviderConfigError, SaaSService
+from invplatform.saas.service import (
+    PARSE_JOB_TASK,
+    CollectionJobError,
+    ProviderConfigError,
+    SaaSService,
+)
 
 
 def _build_service(tmp_path: Path) -> tuple[SaaSService, InMemoryJobQueue]:
@@ -474,6 +480,118 @@ def test_create_provider_config_maps_db_unique_conflict(tmp_path: Path) -> None:
     with pytest.raises(ProviderConfigError, match="already exists") as exc:
         service.create_provider_config(tenant.id, provider_type="gmail")
     assert exc.value.code == "PROVIDER_CONFLICT"
+
+
+def test_collection_job_create_idempotency_and_tenant_scoping(tmp_path: Path) -> None:
+    service, _queue = _build_service(tmp_path)
+    tenant_a, _ = service.bootstrap_tenant("Tenant A")
+    tenant_b, _ = service.bootstrap_tenant("Tenant B")
+
+    first = service.create_collection_job(
+        tenant_a.id,
+        providers=["gmail", "outlook"],
+        month_scope="2026-04",
+        idempotency_key="collect-key",
+        actor="ops-a",
+    )
+    second = service.create_collection_job(
+        tenant_a.id,
+        providers=["gmail"],
+        month_scope="2026-05",
+        idempotency_key="collect-key",
+        actor="ops-a",
+    )
+    assert first.id == second.id
+    assert first.status == "queued"
+    assert first.month_scope == "2026-04"
+
+    other_tenant = service.create_collection_job(
+        tenant_b.id,
+        providers=["gmail"],
+        month_scope="2026-04",
+        idempotency_key="collect-key",
+    )
+    assert other_tenant.id != first.id
+
+    listed_a, total_a = service.list_collection_jobs(
+        tenant_a.id, status="queued", limit=10, offset=0
+    )
+    assert total_a == 1
+    assert listed_a[0].id == first.id
+
+    fetched = service.get_collection_job(tenant_a.id, first.id)
+    assert fetched is not None
+    assert fetched.id == first.id
+
+    with service.session_factory() as session:
+        session.info["tenant_id"] = tenant_a.id
+        idempotency_records = list(
+            session.execute(
+                select(IdempotencyRecord).where(
+                    IdempotencyRecord.scope == "collection_jobs.create",
+                    IdempotencyRecord.tenant_id == tenant_a.id,
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(idempotency_records) == 1
+        assert idempotency_records[0].resource_id == first.id
+
+        audit_events = list(
+            session.execute(
+                select(AuditEvent).where(
+                    AuditEvent.tenant_id == tenant_a.id,
+                    AuditEvent.event_type == "collection_job.create",
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(audit_events) == 1
+        rows = list(
+            session.execute(
+                select(CollectionJob).where(CollectionJob.tenant_id == tenant_a.id)
+            )
+            .scalars()
+            .all()
+        )
+        assert len(rows) == 1
+
+
+def test_collection_job_validation_errors(tmp_path: Path) -> None:
+    service, _queue = _build_service(tmp_path)
+    tenant, _ = service.bootstrap_tenant("Tenant")
+
+    with pytest.raises(CollectionJobError, match="providers must be a non-empty list"):
+        service.create_collection_job(
+            tenant.id,
+            providers=[],
+            month_scope="2026-04",
+        )
+
+    with pytest.raises(CollectionJobError, match="providers must only contain"):
+        service.create_collection_job(
+            tenant.id,
+            providers=["gmail", "dropbox"],
+            month_scope="2026-04",
+        )
+
+    with pytest.raises(CollectionJobError, match="month_scope must match YYYY-MM"):
+        service.create_collection_job(
+            tenant.id,
+            providers=["gmail"],
+            month_scope="2026-13",
+        )
+
+    with pytest.raises(CollectionJobError, match="status must be one of"):
+        service.list_collection_jobs(tenant.id, status="unknown", limit=10, offset=0)
+
+    with pytest.raises(CollectionJobError, match="limit must be >= 1"):
+        service.list_collection_jobs(tenant.id, limit=0, offset=0)
+
+    with pytest.raises(CollectionJobError, match="offset must be >= 0"):
+        service.list_collection_jobs(tenant.id, limit=10, offset=-1)
 
 
 def test_register_file_and_create_parse_job_enqueues_task(tmp_path: Path) -> None:

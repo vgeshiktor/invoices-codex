@@ -72,6 +72,9 @@ FR-7 Report retrieval:
 FR-8 Auditing:
 - Security-sensitive actions create audit events.
 
+FR-9 Collection run lifecycle:
+- Client can create and query tenant-scoped collection jobs with explicit lifecycle status (`queued/running/succeeded/failed`).
+
 ## 6. Non-Functional Requirements (NFR)
 
 - Multi-tenancy: strict tenant data isolation.
@@ -109,6 +112,13 @@ Given malformed or unsupported PDFs in a parse job
 When worker processes job
 Then job records failures clearly without corrupting other records
 And API returns actionable status details.
+
+### Journey E: Collection Run Tracking
+
+Given a tenant initiates a collection run
+When client creates and queries collection jobs
+Then collection lifecycle status is persisted and queryable per tenant
+And cross-tenant collection jobs are never visible.
 
 ## 8. MVP Milestones
 

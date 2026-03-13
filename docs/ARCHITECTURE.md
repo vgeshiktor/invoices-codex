@@ -29,19 +29,21 @@ Out of scope:
 - `ApiKey`: tenant-scoped credentials (hashed at rest).
 - `InvoiceFile`: uploaded file metadata and storage location.
 - `ParseJob`: async request to parse one or more files.
+- `CollectionJob`: async collection run metadata and lifecycle state.
 - `InvoiceRecord`: normalized invoice row produced by parser domain.
 - `Report`: async generated artifact bundle from selected records/jobs.
 - `AuditEvent`: immutable security and product audit trail.
 
 ### 3.2 Relationships
 
-- One `Tenant` owns many `ApiKey`, `InvoiceFile`, `ParseJob`, `InvoiceRecord`, `Report`, `AuditEvent`.
+- One `Tenant` owns many `ApiKey`, `InvoiceFile`, `CollectionJob`, `ParseJob`, `InvoiceRecord`, `Report`, `AuditEvent`.
 - One `ParseJob` references many `InvoiceFile`; produces many `InvoiceRecord`.
 - One `Report` references a set of invoice records (directly or by filter scope).
 
 ### 3.3 Lifecycles
 
 - `ParseJob.status`: `queued -> running -> succeeded | failed`.
+- `CollectionJob.status`: `queued -> running -> succeeded | failed`.
 - `Report.status`: `queued -> running -> succeeded | failed`.
 - `InvoiceFile.status`: `uploaded -> validated -> parsed | rejected`.
 

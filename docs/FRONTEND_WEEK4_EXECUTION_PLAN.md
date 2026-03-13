@@ -29,6 +29,8 @@ By end of Week 4:
 
 ## 4. Backend Contract for Week 4 (Freeze Early)
 
+Canonical contract source: `docs/contracts/COLLECTION_JOBS_WEEK4_CONTRACT.md`.
+
 Collection job endpoints (tenant-scoped):
 - `POST /v1/collection-jobs`
 - `GET /v1/collection-jobs`

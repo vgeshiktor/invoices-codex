@@ -18,6 +18,7 @@ def _tenant_scoped_models() -> tuple[type[object], ...]:
     from .models import (
         AuthSession,
         AuditEvent,
+        CollectionJob,
         IdempotencyRecord,
         InvoiceFile,
         InvoiceRecord,
@@ -31,6 +32,7 @@ def _tenant_scoped_models() -> tuple[type[object], ...]:
     return (
         InvoiceFile,
         ParseJob,
+        CollectionJob,
         InvoiceRecord,
         Report,
         ReportArtifact,
