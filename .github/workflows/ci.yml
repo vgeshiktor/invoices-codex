@@ -80,7 +80,9 @@ jobs:
           - suite: integration
             command: npm run test:integration
           - suite: e2e
-            command: npm run build && npm run test:e2e
+            command: |
+              npm run build
+              npm run test:e2e
     defaults:
       run:
         working-directory: apps/web
