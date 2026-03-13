@@ -11,7 +11,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "api:generate": "openapi-ts -i ../../integrations/openapi/saas-openapi.v0.1.0.json -o src/shared/api/generated -c @hey-api/client-fetch",
-    "api:check": "npm run api:generate && (test -z \"$(git status --porcelain --untracked-files=all -- src/shared/api/generated)\" || (echo \"Generated API client drift detected:\" && git status --short --untracked-files=all -- src/shared/api/generated && exit 1))"
+    "api:check": "npm run api:generate && ./scripts/check-api-drift.sh"
   },
   "dependencies": {
     "react": "^19.2.0",

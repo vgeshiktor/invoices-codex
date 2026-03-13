@@ -54,7 +54,7 @@
       "requirement": "Generated-client drift check includes untracked files guard",
       "scope": "diff",
       "patterns": [
-        "untracked-files=all -- src/shared/api/generated",
+        "scripts/check-api-drift.sh",
         "Generated API client drift detected"
       ],
       "on_missing": "FAIL"
