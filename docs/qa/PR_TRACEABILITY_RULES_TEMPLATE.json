@@ -2,70 +2,55 @@
   "requirements": [
     {
       "source": "docs/FRONTEND_GITHUB_ISSUES.md",
-      "requirement": "FE-007 adds frontend lint gate in CI",
+      "requirement": "FE-701 CI runs unit/integration/e2e suites",
       "scope": "diff",
       "patterns": [
-        "name: Frontend lint",
-        "npm run lint"
+        "suite: unit",
+        "suite: integration",
+        "suite: e2e"
       ],
       "on_missing": "FAIL"
     },
     {
       "source": "docs/FRONTEND_GITHUB_ISSUES.md",
-      "requirement": "FE-007 adds frontend typecheck gate in CI",
+      "requirement": "FE-701 suite commands are mapped in CI",
       "scope": "diff",
       "patterns": [
-        "name: Frontend typecheck",
-        "npm run typecheck"
+        "npm run test:unit",
+        "npm run test:integration",
+        "npm run test:e2e"
       ],
       "on_missing": "FAIL"
     },
     {
-      "source": "docs/FRONTEND_GITHUB_ISSUES.md",
-      "requirement": "FE-007 adds frontend test gate in CI",
+      "source": "docs/FRONTEND_CONVERSION_BACKLOG.md",
+      "requirement": "Unit/integration stack uses Vitest + RTL + MSW",
       "scope": "diff",
       "patterns": [
-        "name: Frontend tests",
-        "npm run test"
+        "\"vitest\"",
+        "\"@testing-library/react\"",
+        "\"msw\""
       ],
       "on_missing": "FAIL"
     },
     {
-      "source": "docs/FRONTEND_GITHUB_ISSUES.md",
-      "requirement": "FE-007 adds frontend build gate in CI",
+      "source": "docs/FRONTEND_CONVERSION_BACKLOG.md",
+      "requirement": "E2E stack uses Playwright",
       "scope": "diff",
       "patterns": [
-        "name: Frontend build",
-        "npm run build"
+        "\"@playwright/test\"",
+        "playwright test"
       ],
       "on_missing": "FAIL"
     },
     {
-      "source": "docs/FRONTEND_GITHUB_ISSUES.md",
-      "requirement": "Frontend package scripts include test runner",
+      "source": "docs/FRONTEND_WEEK10_EXECUTION_PLAN.md",
+      "requirement": "Required FE-701 check names are documented",
       "scope": "diff",
       "patterns": [
-        "\"test\": \"vitest run\""
-      ],
-      "on_missing": "FAIL"
-    },
-    {
-      "source": "docs/frontend/FE_OPENAPI_CLIENT_PLAN.md",
-      "requirement": "Generated-client drift check includes untracked files guard",
-      "scope": "diff",
-      "patterns": [
-        "scripts/check-api-drift.sh",
-        "Generated API client drift detected"
-      ],
-      "on_missing": "FAIL"
-    },
-    {
-      "source": "docs/FRONTEND_GITHUB_ISSUES.md",
-      "requirement": "Frontend tests include failure-path coverage",
-      "scope": "diff",
-      "patterns": [
-        "does not throw on circular objects",
-        "\\[Circular\\]"
+        "`frontend / unit`",
+        "`frontend / integration`",
+        "`frontend / e2e`"
       ],
       "on_missing": "FAIL"
     }

@@ -38,7 +38,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -68,3 +67,36 @@ jobs:
       - name: Frontend build
         working-directory: apps/web
         run: npm run build
+
+  frontend-testing-pyramid:
+    name: frontend / ${{ matrix.suite }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: unit
+            command: npm run test:unit
+          - suite: integration
+            command: npm run test:integration
+          - suite: e2e
+            command: |
+              npm run build
+              npm run test:e2e
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Install Playwright browsers
+        if: matrix.suite == 'e2e'
+        run: npx playwright install --with-deps chromium
+      - name: Run frontend ${{ matrix.suite }} suite
+        run: ${{ matrix.command }}
