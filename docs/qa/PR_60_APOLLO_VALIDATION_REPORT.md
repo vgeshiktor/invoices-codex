@@ -1,6 +1,6 @@
 # PR Validation Report
 
-Date: 2026-03-13
+Date: 2026-03-14
 PR: https://github.com/vgeshiktor/invoices-codex/pull/60
 Repository: vgeshiktor/invoices-codex
 
@@ -19,7 +19,7 @@ Repository: vgeshiktor/invoices-codex
 | 2 | PR summary follows documentation guidelines | PASS | Required sections found: problem, design, testing, rollout/risk. |
 | 3 | Commit messages follow naming convention | PASS | All commit headlines match convention. |
 | 4 | Reviewer guide exists and is actionable | PASS | Reviewer guide section found. |
-| 5 | File-level changes are scoped/aligned | PASS | Changed files: 18. Top files: .github/workflows/ci.yml (+33/-0);apps/web/.env.production (+5/-0);apps/web/.env.test (+5/-0);apps/web/.gitignore (+2/-0);apps/web/e2e/testing-pyramid.e2e.spec.ts (+8/-0);apps/web/package-lock.json (+1768/-21);apps/web/package.json (+13/-2);apps/web/playwright.config.ts (+27/-0);apps/web/src/features/dashboard/api/getDashboardSummary.integration.test.ts (+44/-0);apps/web/src/shared/utils/serialization.unit.test.ts (+32/-0);apps/web/src/test/msw/handlers.ts (+44/-0);apps/web/src/test/msw/server.ts (+4/-0) |
+| 5 | File-level changes are scoped/aligned | PASS | Changed files: 19. Top files: .github/workflows/ci.yml (+33/-1);apps/web/.env.production (+5/-0);apps/web/.env.test (+5/-0);apps/web/.gitignore (+2/-0);apps/web/e2e/testing-pyramid.e2e.spec.ts (+8/-0);apps/web/package-lock.json (+1419/-16);apps/web/package.json (+10/-1);apps/web/playwright.config.ts (+27/-0);apps/web/src/features/dashboard/api/getDashboardSummary.integration.test.ts (+44/-0);apps/web/src/shared/utils/serialization.unit.test.ts (+32/-0);apps/web/src/test/msw/handlers.ts (+44/-0);apps/web/src/test/msw/server.ts (+4/-0) |
 | 6 | Linked issues are correct | PASS | No unexpected linked issues. |
 | 7 | Linked issues are complete | PASS | All expected issues are linked. |
 | 8 | Sourcery review findings resolved | PASS | All Sourcery threads resolved (3/3). |
@@ -27,7 +27,7 @@ Repository: vgeshiktor/invoices-codex
 | 10 | PR summary lists resolved issues with closing keywords | PASS | All linked issues are listed with closing keywords in PR body. |
 | 11 | Closing keyword exists in PR body or commits | PASS | Closing keyword reference found in PR body/commits. |
 | 12 | Cross-repo issues use full form when needed | N/A | No cross-repo linked issues. |
-| 13 | All checks are green | PASS | All checks passed (9 checks). |
+| 13 | All checks are green | PASS | All checks passed (11 checks). |
 | 14 | No conflicts with base branch | PASS | mergeable=MERGEABLE, mergeStateStatus=CLEAN |
 
 ## B) PR Body Content Requirements
@@ -67,8 +67,8 @@ Repository: vgeshiktor/invoices-codex
 
 ## F) CI and Mergeability
 
-- Status checks: 9
-- Checks gate: PASS (All checks passed (9 checks).)
+- Status checks: 11
+- Checks gate: PASS (All checks passed (11 checks).)
 - Mergeability gate: PASS (mergeable=MERGEABLE, mergeStateStatus=CLEAN)
 
 ## G) Final Verdict
