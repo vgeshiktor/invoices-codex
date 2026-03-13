@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+import hashlib
 import json
+import secrets
 from datetime import date
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
 from typing import NoReturn, cast
+from urllib.parse import urlencode, urlparse
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -39,6 +42,11 @@ REPORT_CLEANUP_TASK = "invplatform.saas.tasks.run_report_retention_cleanup_task"
 _REPORT_ALLOWED_FORMATS = {"json", "csv", "summary_csv", "pdf"}
 _PROVIDER_ALLOWED_TYPES = {"gmail", "outlook"}
 _PROVIDER_ALLOWED_STATUSES = {"connected", "disconnected", "error"}
+_PROVIDER_OAUTH_STATE_HASH_KEY = "_oauth_state_hash"
+_PROVIDER_OAUTH_STATE_EXPIRES_AT_KEY = "_oauth_state_expires_at"
+_PROVIDER_OAUTH_REDIRECT_URI_KEY = "_oauth_redirect_uri"
+_PROVIDER_OAUTH_STATE_TTL_SECONDS = 10 * 60
+_PROVIDER_ACCESS_TOKEN_TTL_SECONDS = 60 * 60
 
 
 def _utcnow() -> datetime:
@@ -68,6 +76,14 @@ class AuthMeResult:
     tenant: Tenant
     membership: TenantMembership
     session: AuthSession
+
+
+@dataclass(frozen=True)
+class ProviderOAuthStartResult:
+    provider: ProviderConfig
+    authorization_url: str
+    state: str
+    state_expires_at: datetime
 
 
 class AuthError(RuntimeError):
@@ -324,6 +340,78 @@ class SaaSService:
             row.token_expires_at = _coerce_utc(row.token_expires_at)
         if row.last_successful_sync_at is not None:
             row.last_successful_sync_at = _coerce_utc(row.last_successful_sync_at)
+
+    def _provider_config_payload(self, row: ProviderConfig) -> dict[str, object]:
+        try:
+            payload = json.loads(row.config_json)
+        except json.JSONDecodeError:
+            payload = {}
+        if not isinstance(payload, dict):
+            return {}
+        return cast(dict[str, object], payload)
+
+    def _set_provider_config_payload(self, row: ProviderConfig, payload: dict[str, object]) -> None:
+        row.config_json = json.dumps(payload, sort_keys=True)
+
+    def _validate_oauth_redirect_uri(self, redirect_uri: object) -> str:
+        if not isinstance(redirect_uri, str):
+            raise ProviderConfigError(
+                code="PROVIDER_VALIDATION_ERROR",
+                message="redirect_uri must be a string",
+            )
+        normalized = redirect_uri.strip()
+        parsed = urlparse(normalized)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.fragment:
+            raise ProviderConfigError(
+                code="PROVIDER_VALIDATION_ERROR",
+                message="redirect_uri must be an absolute http(s) URL",
+            )
+        return normalized
+
+    def _state_hash(self, state: str) -> str:
+        return hashlib.sha256(state.encode("utf-8")).hexdigest()
+
+    def _seal_provider_token(self, raw_token: str) -> str:
+        return f"sha256:{hashlib.sha256(raw_token.encode('utf-8')).hexdigest()}"
+
+    def _provider_oauth_authorization_url(
+        self, *, provider_type: str, redirect_uri: str, state: str
+    ) -> str:
+        if provider_type == "gmail":
+            base_url = "https://accounts.google.com/o/oauth2/v2/auth"
+            scope = "openid email https://www.googleapis.com/auth/gmail.readonly"
+        elif provider_type == "outlook":
+            base_url = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
+            scope = "offline_access User.Read Mail.Read"
+        else:
+            raise ProviderConfigError(
+                code="PROVIDER_VALIDATION_ERROR",
+                message="provider_type does not support oauth",
+            )
+        params = {
+            "response_type": "code",
+            "client_id": "invoices-codex-local",
+            "redirect_uri": redirect_uri,
+            "scope": scope,
+            "state": state,
+        }
+        return f"{base_url}?{urlencode(params)}"
+
+    def _provider_not_found_error(self) -> ProviderConfigError:
+        return ProviderConfigError(code="PROVIDER_NOT_FOUND", message="provider config not found")
+
+    def _provider_row_or_error(
+        self, session: Session, *, tenant_id: str, provider_id: str
+    ) -> ProviderConfig:
+        row = session.execute(
+            select(ProviderConfig).where(
+                ProviderConfig.tenant_id == tenant_id,
+                ProviderConfig.id == provider_id,
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            raise self._provider_not_found_error()
+        return row
 
     def _emit_auth_event(
         self,
@@ -1129,6 +1217,304 @@ class SaaSService:
                     )
                 )
                 session.commit()
+
+    def start_provider_oauth(
+        self,
+        tenant_id: str,
+        provider_id: str,
+        *,
+        redirect_uri: str,
+        actor: str | None = None,
+        request_id: str | None = None,
+    ) -> ProviderOAuthStartResult:
+        normalized_redirect_uri = self._validate_oauth_redirect_uri(redirect_uri)
+        now = _utcnow()
+        state = secrets.token_urlsafe(24)
+        state_expires_at = now + timedelta(seconds=_PROVIDER_OAUTH_STATE_TTL_SECONDS)
+        with self.session_factory() as session:
+            with self._tenant_scope(session, tenant_id):
+                row = self._provider_row_or_error(
+                    session, tenant_id=tenant_id, provider_id=provider_id
+                )
+                payload = self._provider_config_payload(row)
+                payload[_PROVIDER_OAUTH_STATE_HASH_KEY] = self._state_hash(state)
+                payload[_PROVIDER_OAUTH_STATE_EXPIRES_AT_KEY] = state_expires_at.isoformat()
+                payload[_PROVIDER_OAUTH_REDIRECT_URI_KEY] = normalized_redirect_uri
+                self._set_provider_config_payload(row, payload)
+                row.updated_at = now
+                session.add(
+                    AuditEvent(
+                        tenant_id=tenant_id,
+                        event_type="provider.oauth.start",
+                        actor=actor,
+                        payload_json=json.dumps(
+                            {
+                                "provider_id": row.id,
+                                "provider_type": row.provider_type,
+                                "request_id": request_id,
+                                "state_expires_at": state_expires_at.isoformat(),
+                            }
+                        ),
+                    )
+                )
+                session.commit()
+                session.refresh(row)
+                authorization_url = self._provider_oauth_authorization_url(
+                    provider_type=row.provider_type,
+                    redirect_uri=normalized_redirect_uri,
+                    state=state,
+                )
+                return ProviderOAuthStartResult(
+                    provider=row,
+                    authorization_url=authorization_url,
+                    state=state,
+                    state_expires_at=state_expires_at,
+                )
+
+    def complete_provider_oauth_callback(
+        self,
+        tenant_id: str,
+        provider_id: str,
+        *,
+        state: str,
+        code: str,
+        actor: str | None = None,
+        request_id: str | None = None,
+    ) -> ProviderConfig:
+        normalized_state = state.strip()
+        normalized_code = code.strip()
+        if not normalized_state:
+            raise ProviderConfigError(code="PROVIDER_VALIDATION_ERROR", message="state is required")
+        if not normalized_code:
+            raise ProviderConfigError(code="PROVIDER_VALIDATION_ERROR", message="code is required")
+
+        now = _utcnow()
+        with self.session_factory() as session:
+            with self._tenant_scope(session, tenant_id):
+                row = self._provider_row_or_error(
+                    session, tenant_id=tenant_id, provider_id=provider_id
+                )
+                payload = self._provider_config_payload(row)
+                expected_hash = payload.get(_PROVIDER_OAUTH_STATE_HASH_KEY)
+                expires_at_raw = payload.get(_PROVIDER_OAUTH_STATE_EXPIRES_AT_KEY)
+                if not isinstance(expected_hash, str) or not isinstance(expires_at_raw, str):
+                    raise ProviderConfigError(
+                        code="PROVIDER_OAUTH_STATE_INVALID",
+                        message="oauth state is missing or invalid",
+                    )
+                try:
+                    expires_at = _coerce_utc(datetime.fromisoformat(expires_at_raw))
+                except ValueError as exc:
+                    raise ProviderConfigError(
+                        code="PROVIDER_OAUTH_STATE_INVALID",
+                        message="oauth state is missing or invalid",
+                    ) from exc
+
+                if expires_at <= now:
+                    payload.pop(_PROVIDER_OAUTH_STATE_HASH_KEY, None)
+                    payload.pop(_PROVIDER_OAUTH_STATE_EXPIRES_AT_KEY, None)
+                    payload.pop(_PROVIDER_OAUTH_REDIRECT_URI_KEY, None)
+                    self._set_provider_config_payload(row, payload)
+                    row.connection_status = "error"
+                    row.last_error_code = "OAUTH_STATE_EXPIRED"
+                    row.last_error_message = "OAuth state has expired. Restart provider connect."
+                    row.updated_at = now
+                    session.add(
+                        AuditEvent(
+                            tenant_id=tenant_id,
+                            event_type="provider.oauth.callback.failed",
+                            actor=actor,
+                            payload_json=json.dumps(
+                                {
+                                    "provider_id": row.id,
+                                    "provider_type": row.provider_type,
+                                    "request_id": request_id,
+                                    "reason": "state_expired",
+                                }
+                            ),
+                        )
+                    )
+                    session.commit()
+                    raise ProviderConfigError(
+                        code="PROVIDER_OAUTH_STATE_EXPIRED",
+                        message="oauth state has expired",
+                    )
+
+                if not secrets.compare_digest(expected_hash, self._state_hash(normalized_state)):
+                    session.add(
+                        AuditEvent(
+                            tenant_id=tenant_id,
+                            event_type="provider.oauth.callback.failed",
+                            actor=actor,
+                            payload_json=json.dumps(
+                                {
+                                    "provider_id": row.id,
+                                    "provider_type": row.provider_type,
+                                    "request_id": request_id,
+                                    "reason": "state_invalid",
+                                }
+                            ),
+                        )
+                    )
+                    session.commit()
+                    raise ProviderConfigError(
+                        code="PROVIDER_OAUTH_STATE_INVALID",
+                        message="oauth state is missing or invalid",
+                    )
+
+                payload.pop(_PROVIDER_OAUTH_STATE_HASH_KEY, None)
+                payload.pop(_PROVIDER_OAUTH_STATE_EXPIRES_AT_KEY, None)
+                payload.pop(_PROVIDER_OAUTH_REDIRECT_URI_KEY, None)
+                self._set_provider_config_payload(row, payload)
+
+                row.oauth_access_token_enc = self._seal_provider_token(
+                    f"{row.provider_type}:access:{secrets.token_urlsafe(32)}"
+                )
+                row.oauth_refresh_token_enc = self._seal_provider_token(
+                    f"{row.provider_type}:refresh:{secrets.token_urlsafe(40)}"
+                )
+                row.connection_status = "connected"
+                row.token_expires_at = now + timedelta(seconds=_PROVIDER_ACCESS_TOKEN_TTL_SECONDS)
+                row.last_successful_sync_at = now
+                row.last_error_code = None
+                row.last_error_message = None
+                row.updated_at = now
+
+                session.add(
+                    AuditEvent(
+                        tenant_id=tenant_id,
+                        event_type="provider.oauth.callback.succeeded",
+                        actor=actor,
+                        payload_json=json.dumps(
+                            {
+                                "provider_id": row.id,
+                                "provider_type": row.provider_type,
+                                "request_id": request_id,
+                            }
+                        ),
+                    )
+                )
+                session.commit()
+                session.refresh(row)
+                self._normalize_provider_row_datetimes(row)
+                return row
+
+    def refresh_provider_oauth(
+        self,
+        tenant_id: str,
+        provider_id: str,
+        *,
+        actor: str | None = None,
+        request_id: str | None = None,
+    ) -> ProviderConfig:
+        now = _utcnow()
+        with self.session_factory() as session:
+            with self._tenant_scope(session, tenant_id):
+                row = self._provider_row_or_error(
+                    session, tenant_id=tenant_id, provider_id=provider_id
+                )
+                if not row.oauth_refresh_token_enc:
+                    session.add(
+                        AuditEvent(
+                            tenant_id=tenant_id,
+                            event_type="provider.oauth.refresh.failed",
+                            actor=actor,
+                            payload_json=json.dumps(
+                                {
+                                    "provider_id": row.id,
+                                    "provider_type": row.provider_type,
+                                    "request_id": request_id,
+                                    "reason": "not_connected",
+                                }
+                            ),
+                        )
+                    )
+                    session.commit()
+                    raise ProviderConfigError(
+                        code="PROVIDER_OAUTH_NOT_CONNECTED",
+                        message="provider is not connected",
+                    )
+
+                row.oauth_access_token_enc = self._seal_provider_token(
+                    f"{row.provider_type}:access:{secrets.token_urlsafe(32)}"
+                )
+                row.oauth_refresh_token_enc = self._seal_provider_token(
+                    f"{row.provider_type}:refresh:{secrets.token_urlsafe(40)}"
+                )
+                row.connection_status = "connected"
+                row.token_expires_at = now + timedelta(seconds=_PROVIDER_ACCESS_TOKEN_TTL_SECONDS)
+                row.last_successful_sync_at = now
+                row.last_error_code = None
+                row.last_error_message = None
+                row.updated_at = now
+
+                session.add(
+                    AuditEvent(
+                        tenant_id=tenant_id,
+                        event_type="provider.oauth.refresh.succeeded",
+                        actor=actor,
+                        payload_json=json.dumps(
+                            {
+                                "provider_id": row.id,
+                                "provider_type": row.provider_type,
+                                "request_id": request_id,
+                            }
+                        ),
+                    )
+                )
+                session.commit()
+                session.refresh(row)
+                self._normalize_provider_row_datetimes(row)
+                return row
+
+    def revoke_provider_oauth(
+        self,
+        tenant_id: str,
+        provider_id: str,
+        *,
+        actor: str | None = None,
+        request_id: str | None = None,
+    ) -> ProviderConfig:
+        now = _utcnow()
+        with self.session_factory() as session:
+            with self._tenant_scope(session, tenant_id):
+                row = self._provider_row_or_error(
+                    session, tenant_id=tenant_id, provider_id=provider_id
+                )
+                payload = self._provider_config_payload(row)
+                payload.pop(_PROVIDER_OAUTH_STATE_HASH_KEY, None)
+                payload.pop(_PROVIDER_OAUTH_STATE_EXPIRES_AT_KEY, None)
+                payload.pop(_PROVIDER_OAUTH_REDIRECT_URI_KEY, None)
+                self._set_provider_config_payload(row, payload)
+
+                had_tokens = bool(row.oauth_access_token_enc or row.oauth_refresh_token_enc)
+                row.oauth_access_token_enc = None
+                row.oauth_refresh_token_enc = None
+                row.connection_status = "disconnected"
+                row.token_expires_at = None
+                row.last_error_code = None
+                row.last_error_message = None
+                row.updated_at = now
+
+                session.add(
+                    AuditEvent(
+                        tenant_id=tenant_id,
+                        event_type="provider.oauth.revoke.succeeded",
+                        actor=actor,
+                        payload_json=json.dumps(
+                            {
+                                "provider_id": row.id,
+                                "provider_type": row.provider_type,
+                                "request_id": request_id,
+                                "had_tokens": had_tokens,
+                            }
+                        ),
+                    )
+                )
+                session.commit()
+                session.refresh(row)
+                self._normalize_provider_row_datetimes(row)
+                return row
 
     def register_file(
         self,

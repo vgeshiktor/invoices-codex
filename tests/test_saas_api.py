@@ -271,9 +271,16 @@ def test_openapi_exposes_api_key_security_scheme(tmp_path: Path) -> None:
     )
     assert "/v1/invoices" in body["paths"]
     assert "/v1/providers" in body["paths"]
+    assert "/v1/providers/{provider_id}/oauth/start" in body["paths"]
+    assert "/v1/providers/{provider_id}/oauth/callback" in body["paths"]
+    assert "/v1/providers/{provider_id}/oauth/refresh" in body["paths"]
+    assert "/v1/providers/{provider_id}/oauth/revoke" in body["paths"]
     assert "/v1/control-plane/tenants" in body["paths"]
     assert body["paths"]["/v1/files"]["post"]["security"] == [{"ApiKeyAuth": []}]
     assert body["paths"]["/v1/providers"]["get"]["security"] == [{"ApiKeyAuth": []}]
+    assert body["paths"]["/v1/providers/{provider_id}/oauth/start"]["post"][
+        "security"
+    ] == [{"ApiKeyAuth": []}]
     assert body["paths"]["/v1/control-plane/tenants"]["get"]["security"] == [
         {"ControlPlaneKeyAuth": []}
     ]
@@ -483,6 +490,88 @@ def test_provider_update_validation_conflict_and_not_found_mapping(
     )
     assert missing_provider.status_code == 404
     assert missing_provider.json()["detail"] == "provider config not found"
+
+
+def test_provider_oauth_lifecycle_endpoints(tmp_path: Path) -> None:
+    client, api_key, _tenant_id = _client(tmp_path)
+    headers = {"X-API-Key": api_key, "X-Actor": "owner"}
+
+    created = client.post(
+        "/v1/providers", headers=headers, json={"provider_type": "gmail"}
+    )
+    assert created.status_code == 201
+    provider_id = created.json()["id"]
+
+    invalid_start = client.post(
+        f"/v1/providers/{provider_id}/oauth/start",
+        headers=headers,
+        json={"redirect_uri": "not-a-url"},
+    )
+    assert invalid_start.status_code == 400
+    assert "redirect_uri" in invalid_start.json()["detail"]
+
+    start = client.post(
+        f"/v1/providers/{provider_id}/oauth/start",
+        headers=headers,
+        json={"redirect_uri": "https://app.example.test/oauth/callback"},
+    )
+    assert start.status_code == 200
+    start_body = start.json()
+    assert start_body["provider"]["id"] == provider_id
+    assert "oauth_access_token_enc" not in start_body["provider"]
+    assert "oauth_refresh_token_enc" not in start_body["provider"]
+    assert start_body["authorization_url"].startswith("https://accounts.google.com/")
+    state = start_body["state"]
+    assert state
+    assert start_body["state_expires_at"]
+
+    bad_callback = client.get(
+        f"/v1/providers/{provider_id}/oauth/callback?state=wrong-state&code=code-1",
+        headers=headers,
+    )
+    assert bad_callback.status_code == 400
+    assert bad_callback.json()["detail"] == "oauth state is missing or invalid"
+
+    callback = client.get(
+        f"/v1/providers/{provider_id}/oauth/callback?state={state}&code=code-1",
+        headers=headers,
+    )
+    assert callback.status_code == 200
+    callback_body = callback.json()
+    assert callback_body["connection_status"] == "connected"
+    assert callback_body["token_expires_at"] is not None
+    assert "oauth_access_token_enc" not in callback_body
+    assert "oauth_refresh_token_enc" not in callback_body
+
+    refreshed = client.post(
+        f"/v1/providers/{provider_id}/oauth/refresh", headers=headers
+    )
+    assert refreshed.status_code == 200
+    refreshed_body = refreshed.json()
+    assert refreshed_body["connection_status"] == "connected"
+    assert refreshed_body["token_expires_at"] is not None
+    assert "oauth_access_token_enc" not in refreshed_body
+    assert "oauth_refresh_token_enc" not in refreshed_body
+
+    revoked = client.post(f"/v1/providers/{provider_id}/oauth/revoke", headers=headers)
+    assert revoked.status_code == 200
+    revoked_body = revoked.json()
+    assert revoked_body["connection_status"] == "disconnected"
+    assert revoked_body["token_expires_at"] is None
+    assert "oauth_access_token_enc" not in revoked_body
+    assert "oauth_refresh_token_enc" not in revoked_body
+
+    refresh_after_revoke = client.post(
+        f"/v1/providers/{provider_id}/oauth/refresh", headers=headers
+    )
+    assert refresh_after_revoke.status_code == 409
+    assert refresh_after_revoke.json()["detail"] == "provider is not connected"
+
+    revoke_missing = client.post(
+        "/v1/providers/missing-provider-id/oauth/revoke", headers=headers
+    )
+    assert revoke_missing.status_code == 404
+    assert revoke_missing.json()["detail"] == "provider config not found"
 
 
 def test_control_plane_tenant_bootstrap_and_listing(tmp_path: Path) -> None:
