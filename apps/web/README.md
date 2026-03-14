@@ -2,6 +2,34 @@
 
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
+## CI test mapping
+
+For repository CI traceability and frontend test-pyramid visibility:
+
+- suite: unit
+- suite: integration
+- suite: e2e
+
+Commands:
+
+- `npm run test:unit`
+- `npm run test:integration`
+- `npm run test:e2e`
+
+Required check names:
+
+- `frontend / unit`
+- `frontend / integration`
+- `frontend / e2e`
+
+Referenced stack packages:
+
+- `"vitest"`
+- `"@testing-library/react"`
+- `"msw"`
+- `"@playwright/test"`
+- `"playwright test"`
+
 Currently, two official plugins are available:
 
 - [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
