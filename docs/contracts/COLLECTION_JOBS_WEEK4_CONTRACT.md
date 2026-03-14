@@ -148,4 +148,7 @@ Collection orchestration worker behavior:
 - Provider settings flows are unchanged for `Connect`, `Disconnect`, and `Re-auth`.
 - Supported provider types remain `'gmail'` and `'outlook'`.
 - Collection execution requires provider state `'connected'`; providers in `'disconnected'` or `'error'` state fail with a structured provider failure.
+- Initial API response status remains `'queued'` before worker execution starts.
+- FE copy alignment: use `Run started` when queue submission succeeds.
 - FE-201 failure-path behavior remains: `renders a recoverable action error when connect fails`.
+- Collection wizard failure-path expectation remains: `shows error state when submit request fails`.
