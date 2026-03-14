@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import type { ApiError } from '../../../shared/api/client';
 import {
@@ -51,6 +51,28 @@ export function ReportDetailScreen({
   const [isRetrying, setIsRetrying] = useState<boolean>(false);
   const [report, setReport] = useState<ReportItem | null>(null);
 
+  const loadReport = useCallback(async (nextReportId: string, options?: { resetView?: boolean }) => {
+    if (options?.resetView) {
+      queueMicrotask(() => {
+        setIsLoading(true);
+        setLoadError(null);
+        setReport(null);
+      });
+    }
+
+    const result = await adapter.getReport(nextReportId);
+    if (!result.ok) {
+      setLoadError(result.error);
+      setIsLoading(false);
+      return null;
+    }
+
+    setReport(result.data);
+    setLoadError(null);
+    setIsLoading(false);
+    return result.data;
+  }, [adapter]);
+
   useEffect(() => {
     if (resolvedReportId.length === 0) {
       return;
@@ -60,24 +82,20 @@ export function ReportDetailScreen({
     let timeoutId: number | undefined;
 
     const load = async () => {
-      const result = await adapter.getReport(resolvedReportId);
-      if (isCancelled) {
+      const nextReport = await loadReport(resolvedReportId, { resetView: true });
+      if (isCancelled || nextReport === null) {
         return;
       }
-
-      if (!result.ok) {
-        setLoadError(result.error);
-        setIsLoading(false);
-        return;
-      }
-
-      setReport(result.data);
-      setLoadError(null);
-      setIsLoading(false);
-
-      if (!isTerminalReportStatus(result.data.status)) {
+      if (!isTerminalReportStatus(nextReport.status)) {
         timeoutId = window.setTimeout(() => {
-          void load();
+          void loadReport(resolvedReportId).then((refreshedReport) => {
+            if (isCancelled || refreshedReport === null || isTerminalReportStatus(refreshedReport.status)) {
+              return;
+            }
+            timeoutId = window.setTimeout(() => {
+              void load();
+            }, pollIntervalMs);
+          });
         }, pollIntervalMs);
       }
     };
@@ -90,7 +108,7 @@ export function ReportDetailScreen({
         window.clearTimeout(timeoutId);
       }
     };
-  }, [adapter, pollIntervalMs, resolvedReportId]);
+  }, [loadReport, pollIntervalMs, resolvedReportId]);
 
   const retry = async () => {
     if (!report) {
@@ -201,8 +219,14 @@ export function ReportDetailScreen({
           <section className="app__panel">
             <div className="report-detail__subheader">
               <h3>Artifacts</h3>
-              <button className="app__button" onClick={() => window.location.reload()} type="button">
-                Refresh page
+              <button
+                className="app__button"
+                onClick={() => {
+                  void loadReport(resolvedReportId, { resetView: true });
+                }}
+                type="button"
+              >
+                Refresh
               </button>
             </div>
             {report.artifacts.length === 0 ? (
