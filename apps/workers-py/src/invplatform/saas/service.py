@@ -109,6 +109,24 @@ class ServiceConfig:
     auth_access_token_secret: str | None = None
     auth_access_token_ttl_seconds: int = 900
     auth_refresh_token_ttl_seconds: int = 30 * 24 * 60 * 60
+    provider_oauth_client_ids: dict[str, str] = field(
+        default_factory=lambda: {
+            "gmail": "invoices-codex-local",
+            "outlook": "invoices-codex-local",
+        }
+    )
+    provider_oauth_scopes: dict[str, str] = field(
+        default_factory=lambda: {
+            "gmail": "openid email https://www.googleapis.com/auth/gmail.readonly",
+            "outlook": "offline_access User.Read Mail.Read",
+        }
+    )
+    provider_oauth_allowed_redirect_hosts: tuple[str, ...] = (
+        "app.example.test",
+        "localhost",
+        "127.0.0.1",
+    )
+    provider_oauth_allow_insecure_local_redirect: bool = True
 
 
 @dataclass
@@ -344,10 +362,16 @@ class SaaSService:
     def _provider_config_payload(self, row: ProviderConfig) -> dict[str, object]:
         try:
             payload = json.loads(row.config_json)
-        except json.JSONDecodeError:
-            payload = {}
+        except json.JSONDecodeError as exc:
+            raise ProviderConfigError(
+                code="PROVIDER_CONFIG_ERROR",
+                message="config_json must be valid JSON",
+            ) from exc
         if not isinstance(payload, dict):
-            return {}
+            raise ProviderConfigError(
+                code="PROVIDER_CONFIG_ERROR",
+                message="config_json must be a JSON object",
+            )
         return cast(dict[str, object], payload)
 
     def _set_provider_config_payload(self, row: ProviderConfig, payload: dict[str, object]) -> None:
@@ -361,10 +385,35 @@ class SaaSService:
             )
         normalized = redirect_uri.strip()
         parsed = urlparse(normalized)
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.fragment:
+        host = (parsed.hostname or "").strip().lower()
+        if not host or not parsed.netloc or parsed.fragment:
             raise ProviderConfigError(
                 code="PROVIDER_VALIDATION_ERROR",
                 message="redirect_uri must be an absolute http(s) URL",
+            )
+        is_local_host = host in {"localhost", "127.0.0.1"}
+        if parsed.scheme == "https":
+            pass
+        elif (
+            parsed.scheme == "http"
+            and self.config.provider_oauth_allow_insecure_local_redirect
+            and is_local_host
+        ):
+            pass
+        else:
+            raise ProviderConfigError(
+                code="PROVIDER_VALIDATION_ERROR",
+                message="redirect_uri must use https (http is allowed only for localhost)",
+            )
+        allowed_hosts = {
+            item.strip().lower()
+            for item in self.config.provider_oauth_allowed_redirect_hosts
+            if item.strip()
+        }
+        if allowed_hosts and host not in allowed_hosts:
+            raise ProviderConfigError(
+                code="PROVIDER_VALIDATION_ERROR",
+                message="redirect_uri host is not allowed",
             )
         return normalized
 
@@ -377,25 +426,41 @@ class SaaSService:
     def _provider_oauth_authorization_url(
         self, *, provider_type: str, redirect_uri: str, state: str
     ) -> str:
-        if provider_type == "gmail":
-            base_url = "https://accounts.google.com/o/oauth2/v2/auth"
-            scope = "openid email https://www.googleapis.com/auth/gmail.readonly"
-        elif provider_type == "outlook":
-            base_url = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
-            scope = "offline_access User.Read Mail.Read"
-        else:
+        base_urls = {
+            "gmail": "https://accounts.google.com/o/oauth2/v2/auth",
+            "outlook": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+        }
+        base_url = base_urls.get(provider_type)
+        if not base_url:
             raise ProviderConfigError(
                 code="PROVIDER_VALIDATION_ERROR",
                 message="provider_type does not support oauth",
             )
+        client_id = self.config.provider_oauth_client_ids.get(provider_type, "").strip()
+        if not client_id:
+            raise ProviderConfigError(
+                code="PROVIDER_OAUTH_CONFIG_ERROR",
+                message=f"oauth client_id is not configured for provider_type={provider_type}",
+            )
+        scope = self.config.provider_oauth_scopes.get(provider_type, "").strip()
+        if not scope:
+            raise ProviderConfigError(
+                code="PROVIDER_OAUTH_CONFIG_ERROR",
+                message=f"oauth scope is not configured for provider_type={provider_type}",
+            )
         params = {
             "response_type": "code",
-            "client_id": "invoices-codex-local",
+            "client_id": client_id,
             "redirect_uri": redirect_uri,
             "scope": scope,
             "state": state,
         }
         return f"{base_url}?{urlencode(params)}"
+
+    def _clear_provider_oauth_state(self, payload: dict[str, object]) -> None:
+        payload.pop(_PROVIDER_OAUTH_STATE_HASH_KEY, None)
+        payload.pop(_PROVIDER_OAUTH_STATE_EXPIRES_AT_KEY, None)
+        payload.pop(_PROVIDER_OAUTH_REDIRECT_URI_KEY, None)
 
     def _provider_not_found_error(self) -> ProviderConfigError:
         return ProviderConfigError(code="PROVIDER_NOT_FOUND", message="provider config not found")
@@ -1311,9 +1376,7 @@ class SaaSService:
                     ) from exc
 
                 if expires_at <= now:
-                    payload.pop(_PROVIDER_OAUTH_STATE_HASH_KEY, None)
-                    payload.pop(_PROVIDER_OAUTH_STATE_EXPIRES_AT_KEY, None)
-                    payload.pop(_PROVIDER_OAUTH_REDIRECT_URI_KEY, None)
+                    self._clear_provider_oauth_state(payload)
                     self._set_provider_config_payload(row, payload)
                     row.connection_status = "error"
                     row.last_error_code = "OAUTH_STATE_EXPIRED"
@@ -1362,9 +1425,7 @@ class SaaSService:
                         message="oauth state is missing or invalid",
                     )
 
-                payload.pop(_PROVIDER_OAUTH_STATE_HASH_KEY, None)
-                payload.pop(_PROVIDER_OAUTH_STATE_EXPIRES_AT_KEY, None)
-                payload.pop(_PROVIDER_OAUTH_REDIRECT_URI_KEY, None)
+                self._clear_provider_oauth_state(payload)
                 self._set_provider_config_payload(row, payload)
 
                 row.oauth_access_token_enc = self._seal_provider_token(
@@ -1482,9 +1543,7 @@ class SaaSService:
                     session, tenant_id=tenant_id, provider_id=provider_id
                 )
                 payload = self._provider_config_payload(row)
-                payload.pop(_PROVIDER_OAUTH_STATE_HASH_KEY, None)
-                payload.pop(_PROVIDER_OAUTH_STATE_EXPIRES_AT_KEY, None)
-                payload.pop(_PROVIDER_OAUTH_REDIRECT_URI_KEY, None)
+                self._clear_provider_oauth_state(payload)
                 self._set_provider_config_payload(row, payload)
 
                 had_tokens = bool(row.oauth_access_token_enc or row.oauth_refresh_token_enc)

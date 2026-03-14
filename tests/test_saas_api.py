@@ -281,6 +281,15 @@ def test_openapi_exposes_api_key_security_scheme(tmp_path: Path) -> None:
     assert body["paths"]["/v1/providers/{provider_id}/oauth/start"]["post"][
         "security"
     ] == [{"ApiKeyAuth": []}]
+    assert body["paths"]["/v1/providers/{provider_id}/oauth/callback"]["get"][
+        "security"
+    ] == [{"ApiKeyAuth": []}]
+    assert body["paths"]["/v1/providers/{provider_id}/oauth/refresh"]["post"][
+        "security"
+    ] == [{"ApiKeyAuth": []}]
+    assert body["paths"]["/v1/providers/{provider_id}/oauth/revoke"]["post"][
+        "security"
+    ] == [{"ApiKeyAuth": []}]
     assert body["paths"]["/v1/control-plane/tenants"]["get"]["security"] == [
         {"ControlPlaneKeyAuth": []}
     ]
@@ -531,6 +540,20 @@ def test_provider_oauth_lifecycle_endpoints(tmp_path: Path) -> None:
     )
     assert bad_callback.status_code == 400
     assert bad_callback.json()["detail"] == "oauth state is missing or invalid"
+
+    empty_state_callback = client.get(
+        f"/v1/providers/{provider_id}/oauth/callback?state=&code=code-1",
+        headers=headers,
+    )
+    assert empty_state_callback.status_code == 400
+    assert empty_state_callback.json()["detail"] == "state is required"
+
+    empty_code_callback = client.get(
+        f"/v1/providers/{provider_id}/oauth/callback?state={state}&code=",
+        headers=headers,
+    )
+    assert empty_code_callback.status_code == 400
+    assert empty_code_callback.json()["detail"] == "code is required"
 
     callback = client.get(
         f"/v1/providers/{provider_id}/oauth/callback?state={state}&code=code-1",

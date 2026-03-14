@@ -123,6 +123,7 @@ Response `200`:
 
 Response errors:
 - `400` invalid `redirect_uri`.
+- `400` redirect URI host not in configured allowlist.
 - `404` provider not found in tenant.
 
 ### `GET /v1/providers/{provider_id}/oauth/callback`
@@ -158,6 +159,7 @@ Response:
 - `config` persists as JSON object (`config_json` at rest).
 - OAuth start stores temporary state metadata in provider config using internal `_oauth_*` keys.
 - OAuth callback consumes and clears stored state metadata.
+- OAuth redirect URIs must match configured allowlist hosts (and use HTTPS except explicitly permitted localhost development callbacks).
 
 ## Tenant Isolation and Security
 

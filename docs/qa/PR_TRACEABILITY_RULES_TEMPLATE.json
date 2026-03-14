@@ -1,56 +1,47 @@
 {
   "requirements": [
     {
-      "source": "docs/FRONTEND_GITHUB_ISSUES.md",
-      "requirement": "FE-701 CI runs unit/integration/e2e suites",
+      "source": "docs/contracts/PROVIDER_WEEK3_CONTRACT.md",
+      "requirement": "OAuth lifecycle endpoints are implemented for providers",
       "scope": "diff",
       "patterns": [
-        "suite: unit",
-        "suite: integration",
-        "suite: e2e"
+        "/oauth/start",
+        "/oauth/callback",
+        "/oauth/refresh",
+        "/oauth/revoke"
       ],
       "on_missing": "FAIL"
     },
     {
-      "source": "docs/FRONTEND_GITHUB_ISSUES.md",
-      "requirement": "FE-701 suite commands are mapped in CI",
+      "source": "docs/ARCHITECTURE.md",
+      "requirement": "Architecture documents tenant-scoped provider OAuth lifecycle",
       "scope": "diff",
       "patterns": [
-        "npm run test:unit",
-        "npm run test:integration",
-        "npm run test:e2e"
+        "Provider OAuth Lifecycle",
+        "tenant-scoped",
+        "_oauth_"
       ],
       "on_missing": "FAIL"
     },
     {
-      "source": "docs/FRONTEND_CONVERSION_BACKLOG.md",
-      "requirement": "Unit/integration stack uses Vitest + RTL + MSW",
+      "source": "tests/test_saas_api.py",
+      "requirement": "API tests cover OAuth lifecycle happy and failure paths",
       "scope": "diff",
       "patterns": [
-        "\"vitest\"",
-        "\"@testing-library/react\"",
-        "\"msw\""
+        "test_provider_oauth_lifecycle_endpoints",
+        "invalid_start",
+        "refresh_after_revoke"
       ],
       "on_missing": "FAIL"
     },
     {
-      "source": "docs/FRONTEND_CONVERSION_BACKLOG.md",
-      "requirement": "E2E stack uses Playwright",
+      "source": "tests/test_saas_service.py",
+      "requirement": "Service tests cover OAuth lifecycle error handling",
       "scope": "diff",
       "patterns": [
-        "\"@playwright/test\"",
-        "playwright test"
-      ],
-      "on_missing": "FAIL"
-    },
-    {
-      "source": "docs/FRONTEND_WEEK10_EXECUTION_PLAN.md",
-      "requirement": "Required FE-701 check names are documented",
-      "scope": "diff",
-      "patterns": [
-        "`frontend / unit`",
-        "`frontend / integration`",
-        "`frontend / e2e`"
+        "test_provider_oauth_lifecycle_and_errors",
+        "oauth state is missing or invalid",
+        "provider is not connected"
       ],
       "on_missing": "FAIL"
     }

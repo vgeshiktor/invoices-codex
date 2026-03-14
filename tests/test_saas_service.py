@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 import re
@@ -314,6 +315,12 @@ def test_provider_oauth_lifecycle_and_errors(tmp_path: Path) -> None:
             provider.id,
             redirect_uri="invalid-uri",
         )
+    with pytest.raises(ProviderConfigError, match="host is not allowed"):
+        service.start_provider_oauth(
+            tenant.id,
+            provider.id,
+            redirect_uri="https://evil.example.test/oauth/callback",
+        )
 
     start = service.start_provider_oauth(
         tenant.id,
@@ -336,10 +343,85 @@ def test_provider_oauth_lifecycle_and_errors(tmp_path: Path) -> None:
             request_id="req-2",
         )
 
+    expired = service.start_provider_oauth(
+        tenant.id,
+        provider.id,
+        redirect_uri="https://app.example.test/oauth/callback",
+        actor="ops",
+        request_id="req-expired-start",
+    )
+    with service.session_factory() as session:
+        row = session.execute(
+            select(ProviderConfig).where(ProviderConfig.id == provider.id)
+        ).scalar_one()
+        payload = json.loads(row.config_json)
+        assert isinstance(payload, dict)
+        payload["_oauth_state_expires_at"] = "2000-01-01T00:00:00+00:00"
+        row.config_json = json.dumps(payload, sort_keys=True)
+        session.commit()
+
+    with pytest.raises(ProviderConfigError) as expired_exc:
+        service.complete_provider_oauth_callback(
+            tenant.id,
+            provider.id,
+            state=expired.state,
+            code="auth-code",
+            actor="ops",
+            request_id="req-expired-callback",
+        )
+    assert expired_exc.value.code == "PROVIDER_OAUTH_STATE_EXPIRED"
+
+    with service.session_factory() as session:
+        row = session.execute(
+            select(ProviderConfig).where(ProviderConfig.id == provider.id)
+        ).scalar_one()
+        payload = json.loads(row.config_json)
+        assert isinstance(payload, dict)
+        assert row.connection_status == "error"
+        assert row.last_error_code == "OAUTH_STATE_EXPIRED"
+        assert "_oauth_state_hash" not in payload
+        assert "_oauth_state_expires_at" not in payload
+        assert "_oauth_redirect_uri" not in payload
+
+    corrupted = service.start_provider_oauth(
+        tenant.id,
+        provider.id,
+        redirect_uri="https://app.example.test/oauth/callback",
+        actor="ops",
+        request_id="req-corrupt-start",
+    )
+    with service.session_factory() as session:
+        row = session.execute(
+            select(ProviderConfig).where(ProviderConfig.id == provider.id)
+        ).scalar_one()
+        payload = json.loads(row.config_json)
+        assert isinstance(payload, dict)
+        payload.pop("_oauth_state_hash", None)
+        row.config_json = json.dumps(payload, sort_keys=True)
+        session.commit()
+
+    with pytest.raises(ProviderConfigError) as invalid_exc:
+        service.complete_provider_oauth_callback(
+            tenant.id,
+            provider.id,
+            state=corrupted.state,
+            code="auth-code",
+            actor="ops",
+            request_id="req-corrupt-callback",
+        )
+    assert invalid_exc.value.code == "PROVIDER_OAUTH_STATE_INVALID"
+
+    success = service.start_provider_oauth(
+        tenant.id,
+        provider.id,
+        redirect_uri="https://app.example.test/oauth/callback",
+        actor="ops",
+        request_id="req-3-start",
+    )
     connected = service.complete_provider_oauth_callback(
         tenant.id,
         provider.id,
-        state=start.state,
+        state=success.state,
         code="auth-code",
         actor="ops",
         request_id="req-3",

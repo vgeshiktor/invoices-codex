@@ -1,7 +1,7 @@
 import json
 import logging
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -37,6 +37,24 @@ class ApiAppConfig:
     auth_access_token_ttl_seconds: int = 900
     auth_refresh_token_ttl_seconds: int = 30 * 24 * 60 * 60
     auth_cookie_secure: bool = True
+    provider_oauth_client_ids: dict[str, str] = field(
+        default_factory=lambda: {
+            "gmail": "invoices-codex-local",
+            "outlook": "invoices-codex-local",
+        }
+    )
+    provider_oauth_scopes: dict[str, str] = field(
+        default_factory=lambda: {
+            "gmail": "openid email https://www.googleapis.com/auth/gmail.readonly",
+            "outlook": "offline_access User.Read Mail.Read",
+        }
+    )
+    provider_oauth_allowed_redirect_hosts: tuple[str, ...] = (
+        "app.example.test",
+        "localhost",
+        "127.0.0.1",
+    )
+    provider_oauth_allow_insecure_local_redirect: bool = True
 
 
 def _normalize_action(method: str, route_path: str) -> str:
@@ -98,6 +116,10 @@ def _build_service(config: ApiAppConfig) -> SaaSService:
         auth_access_token_secret=config.auth_access_token_secret,
         auth_access_token_ttl_seconds=config.auth_access_token_ttl_seconds,
         auth_refresh_token_ttl_seconds=config.auth_refresh_token_ttl_seconds,
+        provider_oauth_client_ids=dict(config.provider_oauth_client_ids),
+        provider_oauth_scopes=dict(config.provider_oauth_scopes),
+        provider_oauth_allowed_redirect_hosts=tuple(config.provider_oauth_allowed_redirect_hosts),
+        provider_oauth_allow_insecure_local_redirect=config.provider_oauth_allow_insecure_local_redirect,
     )
     return SaaSService(session_factory=session_factory, queue=queue, config=service_config)
 
@@ -327,6 +349,8 @@ def create_app(config: ApiAppConfig | None = None):
             "PROVIDER_OAUTH_NOT_CONNECTED": 409,
             "PROVIDER_OAUTH_STATE_INVALID": 400,
             "PROVIDER_OAUTH_STATE_EXPIRED": 400,
+            "PROVIDER_OAUTH_CONFIG_ERROR": 503,
+            "PROVIDER_CONFIG_ERROR": 500,
         }
         return HTTPException(status_code=status_by_code.get(exc.code, 400), detail=exc.message)
 

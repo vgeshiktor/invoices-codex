@@ -106,6 +106,8 @@ Out of scope:
   - `GET /v1/providers/{provider_id}/oauth/callback`
   - `POST /v1/providers/{provider_id}/oauth/refresh`
   - `POST /v1/providers/{provider_id}/oauth/revoke`
+- OAuth provider client IDs/scopes are runtime-configured per provider type.
+- OAuth start enforces redirect URI host allowlists and HTTPS-by-default callback URLs.
 - Temporary OAuth callback state is persisted in internal provider config keys and consumed during callback.
 - OAuth token fields are stored only in encrypted-token columns and never returned via API responses.
 - OAuth state transitions emit audit events with request metadata for traceability.
