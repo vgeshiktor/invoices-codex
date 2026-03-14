@@ -50,9 +50,7 @@ _PROVIDER_OAUTH_STATE_EXPIRES_AT_KEY = "_oauth_state_expires_at"
 _PROVIDER_OAUTH_REDIRECT_URI_KEY = "_oauth_redirect_uri"
 _PROVIDER_OAUTH_STATE_TTL_SECONDS = 10 * 60
 _PROVIDER_ACCESS_TOKEN_TTL_SECONDS = 60 * 60
-_COLLECTION_ALLOWED_STATUSES = {
-    status.value for status in CollectionJobStatus
-}
+_COLLECTION_ALLOWED_STATUSES = {status.value for status in CollectionJobStatus}
 _MONTH_SCOPE_PATTERN = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
 
