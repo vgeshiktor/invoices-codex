@@ -19,7 +19,7 @@ Repository: vgeshiktor/invoices-codex
 | 2 | PR summary follows documentation guidelines | PASS | Required sections found: problem, design, testing, rollout/risk. |
 | 3 | Commit messages follow naming convention | PASS | All commit headlines match convention. |
 | 4 | Reviewer guide exists and is actionable | PASS | Reviewer guide section found. |
-| 5 | File-level changes are scoped/aligned | PASS | Changed files: 8. Top files: apps/workers-py/src/invplatform/saas/api.py (+126/-1);apps/workers-py/src/invplatform/saas/service.py (+445/-0);docs/ARCHITECTURE.md (+14/-0);docs/contracts/PROVIDER_WEEK3_CONTRACT.md (+80/-6);docs/qa/PR_TRACEABILITY_RULES_TEMPLATE.json (+21/-30);tests/test_saas_api.py (+112/-0);tests/test_saas_openapi_export.py (+1/-0);tests/test_saas_service.py (+159/-0) |
+| 5 | File-level changes are scoped/aligned | PASS | Changed files: 9. Top files: apps/workers-py/src/invplatform/saas/api.py (+126/-1);apps/workers-py/src/invplatform/saas/service.py (+445/-0);docs/ARCHITECTURE.md (+14/-0);docs/contracts/PROVIDER_WEEK3_CONTRACT.md (+80/-6);docs/qa/PR_61_VALIDATION_REPORT.md (+80/-0);docs/qa/PR_TRACEABILITY_RULES_TEMPLATE.json (+21/-30);tests/test_saas_api.py (+112/-0);tests/test_saas_openapi_export.py (+1/-0);tests/test_saas_service.py (+159/-0) |
 | 6 | Linked issues are correct | PASS | No unexpected linked issues. |
 | 7 | Linked issues are complete | PASS | All expected issues are linked. |
 | 8 | Sourcery review findings resolved | PASS | All Sourcery threads resolved (5/5). |
