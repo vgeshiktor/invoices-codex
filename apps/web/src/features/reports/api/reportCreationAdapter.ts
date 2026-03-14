@@ -24,15 +24,24 @@ export interface ReportCreationAdapter {
 const REPORT_STATUS_SET = new Set<ReportStatus>(['queued', 'running', 'succeeded', 'failed']);
 const REPORT_FORMAT_SET = new Set<ReportFormat>(REPORT_FORMATS);
 
+const compactMap = <T, U>(items: T[], fn: (item: T) => U | null): U[] =>
+  items.reduce<U[]>((acc, item) => {
+    const mapped = fn(item);
+    if (mapped !== null) {
+      acc.push(mapped);
+    }
+    return acc;
+  }, []);
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null;
 
 const asOptionalString = (value: unknown): string | null =>
   typeof value === 'string' && value.trim().length > 0 ? value : null;
 
-const parseReportStatus = (value: unknown): ReportStatus => {
+const parseReportStatus = (value: unknown): ReportStatus | null => {
   if (typeof value !== 'string' || !REPORT_STATUS_SET.has(value as ReportStatus)) {
-    throw new Error('Malformed report payload: invalid status');
+    return null;
   }
   return value as ReportStatus;
 };
@@ -65,8 +74,7 @@ const parseArtifacts = (value: unknown): ReportArtifact[] => {
     return [];
   }
 
-  return value
-    .map((item): ReportArtifact | null => {
+  return compactMap(value, (item): ReportArtifact | null => {
       if (!isRecord(item) || typeof item.id !== 'string' || typeof item.format !== 'string') {
         return null;
       }
@@ -77,18 +85,22 @@ const parseArtifacts = (value: unknown): ReportArtifact[] => {
         bytes: typeof item.bytes === 'number' ? item.bytes : null,
         storagePath: typeof item.storage_path === 'string' ? item.storage_path : '',
       };
-    })
-    .filter((item): item is ReportArtifact => item !== null);
+    });
 };
 
-const parseReport = (value: unknown): ReportItem => {
+const parseReport = (value: unknown): ReportItem | null => {
   if (!isRecord(value) || typeof value.id !== 'string') {
-    throw new Error('Malformed report payload: missing id');
+    return null;
+  }
+
+  const status = parseReportStatus(value.status);
+  if (status === null) {
+    return null;
   }
 
   return {
     id: value.id,
-    status: parseReportStatus(value.status),
+    status,
     requestedFormats: parseRequestedFormats(value.requested_formats),
     parseJobIds: parseStringArray(value.parse_job_ids),
     filters: parseFilters(value.filters),
@@ -105,15 +117,7 @@ const parseReportsList = (value: unknown): ReportItem[] => {
     return [];
   }
 
-  return value.items
-    .map((item): ReportItem | null => {
-      try {
-        return parseReport(item);
-      } catch {
-        return null;
-      }
-    })
-    .filter((item): item is ReportItem => item !== null);
+  return compactMap(value.items, parseReport);
 };
 
 export const reportCreationAdapter: ReportCreationAdapter = {
@@ -135,9 +139,19 @@ export const reportCreationAdapter: ReportCreationAdapter = {
         };
       }
 
+      const report = parseReport(result.data);
+      if (report === null) {
+        return {
+          ok: false,
+          error: {
+            message: 'Malformed report payload from API',
+          },
+        };
+      }
+
       return {
         ok: true,
-        data: parseReport(result.data),
+        data: report,
       };
     } catch (error) {
       return {

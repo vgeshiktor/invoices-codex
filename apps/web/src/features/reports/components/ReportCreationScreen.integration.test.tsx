@@ -105,4 +105,41 @@ describe('ReportCreationScreen', () => {
       expect(screen.getByRole('alert')).toHaveTextContent('request-id: req-fe-401');
     });
   });
+
+  it('clears prior success banner when a later submit fails', async () => {
+    const created = createReport();
+    const createReportMock = vi
+      .fn<ReportCreationAdapter['createReport']>()
+      .mockResolvedValueOnce({ ok: true, data: created })
+      .mockResolvedValueOnce({
+        ok: false,
+        error: {
+          message: 'second submission failed',
+          requestId: 'req-fe-401-2',
+          status: 400,
+        },
+      });
+    const listReportsMock = vi
+      .fn<ReportCreationAdapter['listReports']>()
+      .mockResolvedValue({ ok: true, data: [] });
+
+    const adapter = buildAdapter({
+      createReport: createReportMock,
+      listReports: listReportsMock,
+    });
+
+    render(<ReportCreationScreen adapter={adapter} />);
+
+    await screen.findByText('No reports created yet.');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Create report' }));
+    await screen.findByText('Report queued');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Create report' }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent('second submission failed');
+      expect(screen.queryByText('Report queued')).not.toBeInTheDocument();
+    });
+  });
 });

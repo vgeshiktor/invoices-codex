@@ -65,6 +65,32 @@ const parseFiltersFromInput = (
   }
 };
 
+const buildCreateReportPayload = (
+  formats: ReportFormat[],
+  parseJobIdsInput: string,
+  filtersInput: string,
+): { ok: true; value: CreateReportInput } | { ok: false; message: string } => {
+  if (formats.length === 0) {
+    return { ok: false, message: 'Select at least one output format.' };
+  }
+
+  const parsedFilters = parseFiltersFromInput(filtersInput);
+  if (!parsedFilters.ok) {
+    return { ok: false, message: parsedFilters.message };
+  }
+
+  const parseJobIds = parseJobIdsFromInput(parseJobIdsInput);
+
+  return {
+    ok: true,
+    value: {
+      filters: parsedFilters.value,
+      formats,
+      parseJobIds: parseJobIds.length > 0 ? parseJobIds : undefined,
+    },
+  };
+};
+
 interface ReportCreationScreenProps {
   adapter?: ReportCreationAdapter;
 }
@@ -78,9 +104,7 @@ export function ReportCreationScreen({
   const [loadError, setLoadError] = useState<ApiError | null>(null);
   const [reports, setReports] = useState<ReportItem[]>([]);
 
-  const [selectedFormats, setSelectedFormats] = useState<Set<ReportFormat>>(
-    () => new Set<ReportFormat>(['json', 'csv']),
-  );
+  const [selectedFormats, setSelectedFormats] = useState<ReportFormat[]>(['json', 'csv']);
   const [parseJobIdsInput, setParseJobIdsInput] = useState('');
   const [filtersInput, setFiltersInput] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
@@ -120,49 +144,38 @@ export function ReportCreationScreen({
     [reports],
   );
 
-  const orderedSelectedFormats = useMemo(
-    () => REPORT_FORMATS.filter((format) => selectedFormats.has(format)),
-    [selectedFormats],
-  );
-
   const toggleFormat = (format: ReportFormat) => {
     setSelectedFormats((currentFormats) => {
-      const nextFormats = new Set(currentFormats);
-      if (nextFormats.has(format)) {
-        nextFormats.delete(format);
-      } else {
-        nextFormats.add(format);
+      if (currentFormats.includes(format)) {
+        return currentFormats.filter((currentFormat) => currentFormat !== format);
       }
-      return nextFormats;
+
+      return REPORT_FORMATS.filter(
+        (currentFormat) =>
+          currentFormat === format || currentFormats.includes(currentFormat),
+      );
     });
   };
 
   const submitReport = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    setCreatedReport(null);
     setFormError(null);
     setSubmitError(null);
 
-    if (orderedSelectedFormats.length === 0) {
-      setFormError('Select at least one output format.');
+    const payload = buildCreateReportPayload(
+      selectedFormats,
+      parseJobIdsInput,
+      filtersInput,
+    );
+    if (!payload.ok) {
+      setFormError(payload.message);
       return;
     }
-
-    const parsedFilters = parseFiltersFromInput(filtersInput);
-    if (!parsedFilters.ok) {
-      setFormError(parsedFilters.message);
-      return;
-    }
-
-    const parseJobIds = parseJobIdsFromInput(parseJobIdsInput);
-    const payload: CreateReportInput = {
-      filters: parsedFilters.value,
-      formats: orderedSelectedFormats,
-      parseJobIds: parseJobIds.length > 0 ? parseJobIds : undefined,
-    };
 
     setIsSubmitting(true);
     try {
-      const result = await adapter.createReport(payload);
+      const result = await adapter.createReport(payload.value);
       if (!result.ok) {
         setSubmitError(result.error);
         return;
@@ -198,7 +211,7 @@ export function ReportCreationScreen({
             {REPORT_FORMATS.map((format) => (
               <label className="report-builder__checkbox" key={format}>
                 <input
-                  checked={selectedFormats.has(format)}
+                  checked={selectedFormats.includes(format)}
                   disabled={isSubmitting}
                   onChange={() => {
                     toggleFormat(format);
