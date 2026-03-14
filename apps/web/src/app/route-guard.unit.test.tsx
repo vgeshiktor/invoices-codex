@@ -1,26 +1,35 @@
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it } from 'vitest';
 import App from '../App';
-import { AUTH_STUB_STORAGE_KEY } from './authStub.constants';
+import { AUTH_ACCESS_TOKEN_STORAGE_KEY } from './authSession.constants';
+import {
+  AUTH_TEST_ACCESS_TOKEN,
+  authLoginInvalidCredentialsHandler,
+  authMeUnauthorizedExpiredHandler,
+  authRefreshUnauthorizedHandler,
+} from '../test/msw/handlers';
+import { server } from '../test/msw/server';
 
-describe('FE-003 app shell + protected route skeleton', () => {
+describe('FE-101 auth flow and protected route behavior', () => {
   beforeEach(() => {
     window.localStorage.clear();
     window.history.pushState({}, '', '/');
   });
 
-  it('redirects unauthenticated users to login when opening protected route', async () => {
-    window.localStorage.setItem(AUTH_STUB_STORAGE_KEY, 'unauthenticated');
+  it('redirects unauthenticated users to login when opening protected routes', async () => {
     window.history.pushState({}, '', '/dashboard');
 
     render(<App />);
 
     expect(await screen.findByRole('heading', { name: 'Login' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Sign in (stub)' })).toBeInTheDocument();
+    expect(
+      screen.getByText('Sign in with your tenant credentials to open protected screens.'),
+    ).toBeInTheDocument();
   });
 
-  it('renders shell layout and navigation for authenticated users', async () => {
-    window.localStorage.setItem(AUTH_STUB_STORAGE_KEY, 'authenticated');
+  it('renders shell layout for authenticated sessions', async () => {
+    window.localStorage.setItem(AUTH_ACCESS_TOKEN_STORAGE_KEY, AUTH_TEST_ACCESS_TOKEN);
     window.history.pushState({}, '', '/dashboard');
 
     render(<App />);
@@ -28,15 +37,33 @@ describe('FE-003 app shell + protected route skeleton', () => {
     expect(await screen.findByRole('heading', { name: 'Invoices Web' })).toBeInTheDocument();
     expect(screen.getByRole('navigation', { name: 'Primary' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Dashboard' })).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByText(/ops@acme\.test/)).toBeInTheDocument();
   });
 
-  it('renders a safe fallback when auth stub state is invalid', async () => {
-    window.localStorage.setItem(AUTH_STUB_STORAGE_KEY, 'broken-state');
+  it('shows session-expired UX and blocks protected route when token and refresh are unauthorized', async () => {
+    server.use(authMeUnauthorizedExpiredHandler, authRefreshUnauthorizedHandler);
+    window.localStorage.setItem(AUTH_ACCESS_TOKEN_STORAGE_KEY, 'expired-token');
     window.history.pushState({}, '', '/dashboard');
 
     render(<App />);
 
-    expect(await screen.findByRole('heading', { name: 'Session check failed' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Retry session check' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Login' })).toBeInTheDocument();
+    expect(screen.getByText('Session expired. Please sign in again.')).toBeInTheDocument();
+  });
+
+  it('keeps user on login and surfaces auth error when credentials are invalid', async () => {
+    server.use(authLoginInvalidCredentialsHandler);
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await screen.findByRole('heading', { name: 'Login' });
+    await user.type(screen.getByLabelText('Tenant slug'), 'acme');
+    await user.type(screen.getByLabelText('Email'), 'ops@acme.test');
+    await user.type(screen.getByLabelText('Password'), 'wrong-password');
+    await user.click(screen.getByRole('button', { name: 'Sign in' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Email or password is incorrect.');
+    expect(screen.getByRole('heading', { name: 'Login' })).toBeInTheDocument();
   });
 });

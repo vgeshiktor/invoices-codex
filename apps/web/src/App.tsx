@@ -1,15 +1,15 @@
 import { BrowserRouter } from 'react-router-dom';
-import { AuthStubProvider } from './app/authStub';
+import { AuthSessionProvider } from './app/authSession';
 import { AppRoutes } from './routes/AppRoutes';
 import './App.css';
 
 function App() {
   return (
-    <AuthStubProvider>
+    <AuthSessionProvider>
       <BrowserRouter>
         <AppRoutes />
       </BrowserRouter>
-    </AuthStubProvider>
+    </AuthSessionProvider>
   );
 }
 
