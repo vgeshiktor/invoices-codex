@@ -14,6 +14,10 @@ const toDisplayName = (providerType: ProviderType): string =>
 
 const nowIso = (): string => new Date().toISOString();
 
+const cloneProvider = (provider: ProviderSettingsItem): ProviderSettingsItem => ({
+  ...provider,
+});
+
 export const createDefaultProviderItems = (): ProviderSettingsItem[] =>
   PROVIDER_ORDER.map((providerType) => ({
     connectionStatus: 'disconnected',
@@ -59,18 +63,18 @@ export const createLocalProviderSettingsAdapter = (): ProviderSettingsAdapter =>
   let providers = createDefaultProviderItems();
 
   return {
-    listProviders: async () => providers,
+    listProviders: async () => providers.map(cloneProvider),
     connectProvider: async (providerType) => {
       providers = updateByProviderType(providers, providerType, (provider) =>
         withUpdatedStatus(provider, 'connected'),
       );
-      return findByProviderType(providers, providerType);
+      return cloneProvider(findByProviderType(providers, providerType));
     },
     disconnectProvider: async (providerType) => {
       providers = updateByProviderType(providers, providerType, (provider) =>
         withUpdatedStatus(provider, 'disconnected'),
       );
-      return findByProviderType(providers, providerType);
+      return cloneProvider(findByProviderType(providers, providerType));
     },
     reauthProvider: async (providerType) => {
       const provider = findByProviderType(providers, providerType);
@@ -80,7 +84,7 @@ export const createLocalProviderSettingsAdapter = (): ProviderSettingsAdapter =>
       providers = updateByProviderType(providers, providerType, (currentProvider) =>
         withUpdatedStatus(currentProvider, 'connected'),
       );
-      return findByProviderType(providers, providerType);
+      return cloneProvider(findByProviderType(providers, providerType));
     },
   };
 };
