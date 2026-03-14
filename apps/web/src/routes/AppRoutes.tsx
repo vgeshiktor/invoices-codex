@@ -5,6 +5,7 @@ import { CollectionRunDetailPage } from '../pages/CollectionRunDetailPage';
 import { CollectionWizardPage } from '../pages/CollectionWizardPage';
 import { ProviderSettingsScreen } from '../features/providers/components/ProviderSettingsScreen';
 import { ReportCreationScreen } from '../features/reports/components/ReportCreationScreen';
+import { ReportDetailScreen } from '../features/reports/components/ReportDetailScreen';
 import { LoginPage } from '../pages/LoginPage';
 import { PlaceholderPage } from '../pages/PlaceholderPage';
 import { RouteStatusPage } from '../pages/RouteStatusPage';
@@ -23,6 +24,7 @@ export function AppRoutes() {
           <Route element={<CollectionWizardPage />} path="/collections" />
           <Route element={<CollectionRunDetailPage />} path="/collections/:collectionJobId" />
           <Route element={<ReportCreationScreen />} path="/reports" />
+          <Route element={<ReportDetailScreen />} path="/reports/:reportId" />
           <Route element={<PlaceholderPage title="Settings" />} path="/settings" />
         </Route>
       </Route>

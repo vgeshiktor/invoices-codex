@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
+import { Link } from 'react-router-dom';
 import type { ApiError } from '../../../shared/api/client';
 import { frontendEnv } from '../../../shared/config/env';
 import { safeJsonStringify } from '../../../shared/utils/serialization';
@@ -11,6 +12,7 @@ import {
   type CreateReportInput,
   type ReportFormat,
   type ReportItem,
+  isTerminalReportStatus,
 } from '../model/report';
 
 const formatLabel: Record<ReportFormat, string> = {
@@ -93,12 +95,14 @@ const buildCreateReportPayload = (
 
 interface ReportCreationScreenProps {
   adapter?: ReportCreationAdapter;
+  pollIntervalMs?: number;
 }
 
 type ReportsLoadState = 'loading' | 'ready' | 'error';
 
 export function ReportCreationScreen({
   adapter = reportCreationAdapter,
+  pollIntervalMs = 4000,
 }: ReportCreationScreenProps) {
   const [loadState, setLoadState] = useState<ReportsLoadState>('loading');
   const [loadError, setLoadError] = useState<ApiError | null>(null);
@@ -133,6 +137,20 @@ export function ReportCreationScreen({
   useEffect(() => {
     void loadReports();
   }, [loadReports]);
+
+  useEffect(() => {
+    if (loadState !== 'ready' || reports.every((report) => isTerminalReportStatus(report.status))) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      void loadReports();
+    }, pollIntervalMs);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [loadReports, loadState, pollIntervalMs, reports]);
 
   const sortedReports = useMemo(
     () =>
@@ -333,8 +351,16 @@ export function ReportCreationScreen({
                 <p className="report-card__meta">
                   Formats: {report.requestedFormats.length > 0 ? report.requestedFormats.join(', ') : 'none'}
                 </p>
+                <p className="report-card__meta">
+                  Created: {report.createdAt ? new Date(report.createdAt).toLocaleString() : 'Not available'}
+                </p>
                 <p className="report-card__meta">Artifacts: {report.artifacts.length}</p>
                 {report.errorMessage && <p className="provider-card__error">{report.errorMessage}</p>}
+                <p className="report-card__actions">
+                  <Link className="app__button" to={`/reports/${report.id}`}>
+                    Open detail
+                  </Link>
+                </p>
               </article>
             ))}
           </div>
