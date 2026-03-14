@@ -181,3 +181,12 @@ Convention:
   - regenerate client (`npm run api:generate`);
   - replace local adapter methods with generated operations;
   - keep UI state contracts unchanged (`connected` / `disconnected` / `error`) to minimize migration risk.
+
+## 14. Week 4 Dependency Note (`FE-301` -> `BE-201`)
+
+- Current committed OpenAPI snapshot still does not include `/v1/collection-jobs` operations.
+- Frontend collection wizard (`FE-301`) uses a typed manual adapter for `POST /v1/collection-jobs` following `docs/contracts/COLLECTION_JOBS_WEEK4_CONTRACT.md`.
+- When collection job endpoints are added to OpenAPI:
+  - regenerate client (`npm run api:generate`);
+  - replace manual collection adapter call-sites with generated operations;
+  - keep request/response UI contracts intact (`providers`, `month_scope`, initial run `id/status`).
