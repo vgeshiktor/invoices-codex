@@ -180,6 +180,60 @@
   border-color: #fecaca;
 }
 
+.collection-wizard {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.collection-wizard__fieldset {
+  border: 1px solid #dbe4ee;
+  border-radius: 10px;
+  margin: 0;
+  padding: 0.75rem;
+}
+
+.collection-wizard__fieldset legend {
+  font-size: 0.9rem;
+  font-weight: 700;
+  padding: 0 0.35rem;
+}
+
+.collection-wizard__providers {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.collection-wizard__provider-option {
+  align-items: center;
+  display: flex;
+  gap: 0.5rem;
+}
+
+.collection-wizard__provider-option input {
+  height: 1rem;
+  margin: 0;
+  width: 1rem;
+}
+
+.collection-wizard__month {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.collection-wizard__month span {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.collection-wizard__month-input {
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  font-size: 0.95rem;
+  min-height: 44px;
+  padding: 0.5rem 0.65rem;
+}
+
 .provider-grid {
   display: grid;
   gap: 1rem;

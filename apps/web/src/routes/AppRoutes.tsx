@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { AppShell } from '../components/shell/AppShell';
 import { DashboardPage } from '../pages/DashboardPage';
+import { CollectionWizardPage } from '../pages/CollectionWizardPage';
 import { ProviderSettingsScreen } from '../features/providers/components/ProviderSettingsScreen';
 import { LoginPage } from '../pages/LoginPage';
 import { PlaceholderPage } from '../pages/PlaceholderPage';
@@ -17,7 +18,7 @@ export function AppRoutes() {
           <Route element={<Navigate replace to="/dashboard" />} index />
           <Route element={<DashboardPage />} path="/dashboard" />
           <Route element={<ProviderSettingsScreen />} path="/providers" />
-          <Route element={<PlaceholderPage title="Collections" />} path="/collections" />
+          <Route element={<CollectionWizardPage />} path="/collections" />
           <Route element={<PlaceholderPage title="Reports" />} path="/reports" />
           <Route element={<PlaceholderPage title="Settings" />} path="/settings" />
         </Route>

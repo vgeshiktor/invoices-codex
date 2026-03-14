@@ -1,44 +1,43 @@
 {
   "requirements": [
     {
-      "source": "docs/FRONTEND_GITHUB_ISSUES.md",
-      "requirement": "FE-201 provider settings UI supports connect/disconnect/re-auth actions",
+      "source": "docs/PRD_V1_SAAS.md",
+      "requirement": "Collection run start UX exists with current-month wizard entry point",
       "scope": "diff",
       "patterns": [
-        "Provider settings",
-        "Connect",
-        "Disconnect",
-        "Re-auth"
+        "Collect current month",
+        "Start collection run",
+        "month_scope"
       ],
       "on_missing": "FAIL"
     },
     {
-      "source": "docs/contracts/PROVIDER_WEEK3_CONTRACT.md",
-      "requirement": "Provider types include gmail and outlook",
+      "source": "docs/ARCHITECTURE.md",
+      "requirement": "Collection jobs create flow uses collection-jobs endpoint contract",
       "scope": "diff",
       "patterns": [
-        "'gmail'",
-        "'outlook'"
+        "/v1/collection-jobs",
+        "providers",
+        "Idempotency-Key"
       ],
       "on_missing": "FAIL"
     },
     {
-      "source": "docs/contracts/PROVIDER_WEEK3_CONTRACT.md",
-      "requirement": "Provider connection states include connected/disconnected/error",
+      "source": "docs/PRD_V1_SAAS.md",
+      "requirement": "Initial run status is surfaced to the user",
       "scope": "diff",
       "patterns": [
-        "'connected'",
-        "'disconnected'",
-        "'error'"
+        "'queued'",
+        "Run started"
       ],
       "on_missing": "FAIL"
     },
     {
-      "source": "docs/FRONTEND_GITHUB_ISSUES.md",
-      "requirement": "FE-201 includes a failure-path test for provider action handling",
+      "source": "docs/PRD_V1_SAAS.md",
+      "requirement": "Collection wizard includes a failure-path test",
       "scope": "diff",
       "patterns": [
-        "renders a recoverable action error when connect fails"
+        "shows error state when submit request fails"
       ],
       "on_missing": "FAIL"
     }
