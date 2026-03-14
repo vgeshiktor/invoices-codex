@@ -8,6 +8,7 @@ import {
 import type { ReportItem, ReportStatus } from '../model/report';
 import { isTerminalReportStatus } from '../model/report';
 import { ReportArtifactDownloads } from './ReportArtifactDownloads';
+import { ReportSummaryCards } from './ReportSummaryCards';
 
 type ReportDetailScreenProps = {
   adapter?: ReportCreationAdapter;
@@ -167,6 +168,10 @@ export function ReportDetailScreen({
 
       {!isLoading && !loadError && report && (
         <>
+          {report.status === 'succeeded' && (
+            <ReportSummaryCards artifacts={report.artifacts} reportId={report.id} />
+          )}
+
           <section className="report-detail-grid">
             <article className="app__panel">
               <header className="report-detail__header">
