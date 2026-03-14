@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import csv
+from dataclasses import dataclass
 import json
 import os
 from collections.abc import Callable
 from datetime import date
 from datetime import datetime, timedelta, timezone
 from io import StringIO
+import uuid
 from typing import cast
 from pathlib import Path
 
@@ -17,18 +19,25 @@ from invplatform.usecases import report_pipeline
 
 from .storage import StorageBackend, build_storage
 from .models import (
+    AuditEvent,
+    CollectionJob,
+    CollectionJobStatus,
     FileStatus,
+    IdempotencyRecord,
     InvoiceFile,
     InvoiceRecord,
     ParseJob,
     ParseJobFile,
     ParseJobStatus,
+    ProviderConfig,
     Report,
     ReportArtifact,
-    IdempotencyRecord,
     ReportParseJob,
     ReportStatus,
 )
+from .queue import JobQueue, build_queue
+
+_PARSE_JOB_TASK_NAME = "invplatform.saas.tasks.run_parse_job_task"
 
 
 def _utcnow() -> datetime:
@@ -205,6 +214,282 @@ def _pdf_report_bytes() -> bytes:
     out = BytesIO()
     writer.write(out)
     return out.getvalue()
+
+
+@dataclass(frozen=True)
+class CollectedProviderFile:
+    filename: str
+    content: bytes
+    mime_type: str = "application/pdf"
+
+
+CollectionProviderExecutor = Callable[[ProviderConfig, str, str], list[CollectedProviderFile]]
+
+
+def _decode_collection_list(raw_json: str) -> list[str]:
+    try:
+        loaded = json.loads(raw_json)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(loaded, list):
+        return []
+    result: list[str] = []
+    for value in loaded:
+        normalized = str(value).strip().lower()
+        if normalized:
+            result.append(normalized)
+    return result
+
+
+def _default_provider_executor(
+    provider: ProviderConfig, month_scope: str, collection_job_id: str
+) -> list[CollectedProviderFile]:
+    month_label = month_scope.replace("-", "")
+    filename = f"{provider.provider_type}_invoice_{month_label}_{collection_job_id[:8]}.pdf"
+    return [CollectedProviderFile(filename=filename, content=_pdf_report_bytes())]
+
+
+def run_collection_job(
+    session_factory: sessionmaker[Session],
+    collection_job_id: str,
+    *,
+    storage_backend: StorageBackend | None = None,
+    queue: JobQueue | None = None,
+    parse_job_task_name: str = _PARSE_JOB_TASK_NAME,
+    provider_executor: CollectionProviderExecutor | None = None,
+) -> CollectionJobStatus:
+    storage = storage_backend or build_storage(os.environ.get("SAAS_STORAGE_URL"))
+    queue = queue or build_queue(os.environ.get("SAAS_REDIS_URL"))
+    execute_provider = provider_executor or _default_provider_executor
+
+    with session_factory() as session:
+        session.info["disable_tenant_guard"] = True
+        job = session.execute(
+            select(CollectionJob).where(CollectionJob.id == collection_job_id)
+        ).scalar_one_or_none()
+        if job is None:
+            raise ValueError(f"collection job not found: {collection_job_id}")
+        if job.status in {
+            CollectionJobStatus.SUCCEEDED.value,
+            CollectionJobStatus.FAILED.value,
+            CollectionJobStatus.RUNNING.value,
+        }:
+            return CollectionJobStatus(job.status)
+        job.status = CollectionJobStatus.RUNNING.value
+        job.started_at = _utcnow()
+        job.updated_at = _utcnow()
+        job.error_message = None
+        session.add(
+            AuditEvent(
+                tenant_id=job.tenant_id,
+                event_type="collection_job.run.started",
+                payload_json=json.dumps({"collection_job_id": job.id}),
+            )
+        )
+        session.commit()
+
+    try:
+        with session_factory() as session:
+            session.info["disable_tenant_guard"] = True
+            job = session.execute(
+                select(CollectionJob).where(CollectionJob.id == collection_job_id)
+            ).scalar_one()
+            providers = _decode_collection_list(job.providers_json)
+            if not providers:
+                raise ValueError("collection job has no providers")
+
+            provider_rows = list(
+                session.execute(
+                    select(ProviderConfig).where(
+                        ProviderConfig.tenant_id == job.tenant_id,
+                        ProviderConfig.provider_type.in_(providers),
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            provider_by_type = {item.provider_type: item for item in provider_rows}
+
+            failures: list[dict[str, str]] = []
+            files_by_provider: dict[str, list[str]] = {}
+            files_discovered = 0
+            files_downloaded = 0
+
+            for provider_name in providers:
+                provider = provider_by_type.get(provider_name)
+                if provider is None:
+                    failures.append(
+                        {
+                            "provider": provider_name,
+                            "code": "PROVIDER_NOT_FOUND",
+                            "message": "provider config not found",
+                        }
+                    )
+                    continue
+                if provider.connection_status != "connected" or not provider.oauth_access_token_enc:
+                    failures.append(
+                        {
+                            "provider": provider_name,
+                            "code": "PROVIDER_NOT_CONNECTED",
+                            "message": "provider is not connected",
+                        }
+                    )
+                    continue
+
+                try:
+                    collected_files = execute_provider(
+                        provider,
+                        job.month_scope,
+                        job.id,
+                    )
+                except Exception as exc:
+                    failures.append(
+                        {
+                            "provider": provider_name,
+                            "code": "PROVIDER_EXECUTOR_ERROR",
+                            "message": str(exc),
+                        }
+                    )
+                    continue
+
+                files_discovered += len(collected_files)
+                for idx, collected in enumerate(collected_files, start=1):
+                    if not collected.content:
+                        failures.append(
+                            {
+                                "provider": provider_name,
+                                "code": "PROVIDER_FILE_EMPTY",
+                                "message": f"provider returned empty file payload at index {idx}",
+                            }
+                        )
+                        continue
+                    filename = Path(collected.filename).name or f"{provider_name}-{idx}.pdf"
+                    storage_key = (
+                        f"uploads/{job.tenant_id}/collection_{job.id}/"
+                        f"{provider_name}/{uuid.uuid4().hex}_{filename}"
+                    )
+                    stored = storage.save_bytes(storage_key, collected.content)
+                    file_row = InvoiceFile(
+                        tenant_id=job.tenant_id,
+                        filename=filename,
+                        storage_path=stored.key,
+                        mime_type=collected.mime_type,
+                        content_sha256=stored.sha256,
+                        bytes=stored.size,
+                        status=FileStatus.UPLOADED.value,
+                    )
+                    session.add(file_row)
+                    session.flush()
+                    files_downloaded += 1
+                    files_by_provider.setdefault(provider_name, []).append(file_row.id)
+
+            parse_job_ids: list[str] = []
+            for provider_name, file_ids in files_by_provider.items():
+                if not file_ids:
+                    continue
+                parse_idempotency_key = f"collection:{job.id}:{provider_name}"
+                parse_job = ParseJob(
+                    tenant_id=job.tenant_id,
+                    debug=False,
+                    idempotency_key=parse_idempotency_key,
+                )
+                session.add(parse_job)
+                session.flush()
+                for file_id in file_ids:
+                    session.add(ParseJobFile(parse_job_id=parse_job.id, file_id=file_id))
+                parse_queue_job_id = queue.enqueue(
+                    parse_job_task_name,
+                    {"parse_job_id": parse_job.id},
+                )
+                parse_job.queue_job_id = parse_queue_job_id
+                session.add(
+                    IdempotencyRecord(
+                        tenant_id=job.tenant_id,
+                        scope="parse_jobs.create",
+                        idempotency_key=parse_idempotency_key,
+                        resource_type="parse_job",
+                        resource_id=parse_job.id,
+                    )
+                )
+                session.add(
+                    AuditEvent(
+                        tenant_id=job.tenant_id,
+                        event_type="parse_job.create",
+                        payload_json=json.dumps(
+                            {
+                                "parse_job_id": parse_job.id,
+                                "queue_job_id": parse_queue_job_id,
+                                "file_ids": file_ids,
+                                "idempotency_key": parse_idempotency_key,
+                                "collection_job_id": job.id,
+                                "provider": provider_name,
+                            }
+                        ),
+                    )
+                )
+                parse_job_ids.append(parse_job.id)
+
+            if files_downloaded == 0 and not failures:
+                failures.append(
+                    {
+                        "provider": "all",
+                        "code": "NO_FILES_DOWNLOADED",
+                        "message": "collection completed without downloadable files",
+                    }
+                )
+
+            status = CollectionJobStatus.SUCCEEDED if not failures else CollectionJobStatus.FAILED
+            job.status = status.value
+            job.files_discovered = files_discovered
+            job.files_downloaded = files_downloaded
+            job.parse_job_ids_json = json.dumps(parse_job_ids, sort_keys=True)
+            job.error_message = (
+                None
+                if status == CollectionJobStatus.SUCCEEDED
+                else json.dumps({"provider_failures": failures}, sort_keys=True)
+            )
+            job.finished_at = _utcnow()
+            job.updated_at = _utcnow()
+            session.add(
+                AuditEvent(
+                    tenant_id=job.tenant_id,
+                    event_type=f"collection_job.run.{status.value}",
+                    payload_json=json.dumps(
+                        {
+                            "collection_job_id": job.id,
+                            "files_discovered": files_discovered,
+                            "files_downloaded": files_downloaded,
+                            "parse_job_ids": parse_job_ids,
+                            "failure_count": len(failures),
+                        }
+                    ),
+                )
+            )
+            session.commit()
+            return status
+    except Exception as exc:
+        with session_factory() as session:
+            session.info["disable_tenant_guard"] = True
+            job = session.execute(
+                select(CollectionJob).where(CollectionJob.id == collection_job_id)
+            ).scalar_one_or_none()
+            if job is None:
+                raise ValueError(f"collection job not found: {collection_job_id}") from exc
+            job.status = CollectionJobStatus.FAILED.value
+            job.error_message = str(exc)
+            job.finished_at = _utcnow()
+            job.updated_at = _utcnow()
+            session.add(
+                AuditEvent(
+                    tenant_id=job.tenant_id,
+                    event_type="collection_job.run.failed",
+                    payload_json=json.dumps(
+                        {"collection_job_id": job.id, "error_message": str(exc)}
+                    ),
+                )
+            )
+            session.commit()
+        return CollectionJobStatus.FAILED
 
 
 def run_parse_job(

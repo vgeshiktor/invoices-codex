@@ -1,7 +1,7 @@
-# Collection Jobs Runtime Contract (Week 4)
+# Collection Jobs Runtime Contract (Week 4/5)
 
-Issue: `BE-201`
-Status: Week 4 backend contract for collection run lifecycle.
+Issues: `BE-201`, `BE-202`
+Status: Backend contract for collection run lifecycle and orchestration.
 
 ## 1. Scope
 
@@ -69,6 +69,7 @@ Validation:
 Idempotency:
 
 - Same tenant + same `Idempotency-Key` returns existing collection job.
+- Initial create enqueues an async collection orchestration task and sets `queue_job_id`.
 
 ### 3.2 List
 
@@ -116,3 +117,28 @@ Payload includes:
 - `month_scope`
 - `status`
 - `idempotency_key`
+
+Execution emits:
+
+- `collection_job.run.started`
+- `collection_job.run.succeeded`
+- `collection_job.run.failed`
+
+## 6. Orchestration Semantics (BE-202)
+
+Collection orchestration worker behavior:
+
+1. Marks job `running` and sets `started_at`.
+2. For each requested provider:
+   - validates provider configuration exists and is connected.
+   - executes provider collector.
+   - persists discovered/downloaded files into SaaS storage + `saas_invoice_files`.
+3. Creates parse jobs linked to collected files and enqueues parse tasks.
+4. Persists:
+   - `files_discovered`
+   - `files_downloaded`
+   - `parse_job_ids`
+5. Finalizes job status:
+   - `succeeded` when all providers complete without failures.
+   - `failed` when any provider fails or no files are downloaded.
+6. Failure details are serialized in `error_message` as UI-safe JSON payload.

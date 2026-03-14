@@ -618,6 +618,7 @@ def test_collection_jobs_create_list_get_and_tenant_isolation(tmp_path: Path) ->
     assert body["status"] == "queued"
     assert body["month_scope"] == "2026-04"
     assert body["providers"] == ["gmail", "outlook"]
+    assert body["queue_job_id"]
     assert body["files_discovered"] == 0
     assert body["files_downloaded"] == 0
     assert body["parse_job_ids"] == []
@@ -629,6 +630,7 @@ def test_collection_jobs_create_list_get_and_tenant_isolation(tmp_path: Path) ->
     )
     assert idempotent.status_code == 201
     assert idempotent.json()["id"] == collection_job_id
+    assert idempotent.json()["queue_job_id"] == body["queue_job_id"]
 
     listing = client.get(
         "/v1/collection-jobs?status=queued&limit=10&offset=0",

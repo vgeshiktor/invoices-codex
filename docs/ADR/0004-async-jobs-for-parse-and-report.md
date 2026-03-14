@@ -9,7 +9,7 @@ Invoice parsing and report generation are variable-duration operations and can e
 
 ## Decision
 
-Implement parse and report operations as asynchronous jobs:
+Implement parse, report, and collection orchestration operations as asynchronous jobs:
 - API creates job records and enqueues background tasks.
 - Worker executes tasks with retries for transient errors.
 - Clients poll job status endpoints.
@@ -20,6 +20,7 @@ Positive:
 - Stable API latency profile.
 - Better resilience and retry semantics.
 - Clear operational visibility of long-running workloads.
+- Collection runs can orchestrate provider execution and parse pipeline linking without synchronous API timeouts.
 
 Negative:
 - Requires queue infrastructure and job lifecycle management.

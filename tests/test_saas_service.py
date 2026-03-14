@@ -483,7 +483,7 @@ def test_create_provider_config_maps_db_unique_conflict(tmp_path: Path) -> None:
 
 
 def test_collection_job_create_idempotency_and_tenant_scoping(tmp_path: Path) -> None:
-    service, _queue = _build_service(tmp_path)
+    service, queue = _build_service(tmp_path)
     tenant_a, _ = service.bootstrap_tenant("Tenant A")
     tenant_b, _ = service.bootstrap_tenant("Tenant B")
 
@@ -504,6 +504,8 @@ def test_collection_job_create_idempotency_and_tenant_scoping(tmp_path: Path) ->
     assert first.id == second.id
     assert first.status == "queued"
     assert first.month_scope == "2026-04"
+    assert first.queue_job_id
+    assert second.queue_job_id == first.queue_job_id
 
     other_tenant = service.create_collection_job(
         tenant_b.id,
@@ -512,6 +514,7 @@ def test_collection_job_create_idempotency_and_tenant_scoping(tmp_path: Path) ->
         idempotency_key="collect-key",
     )
     assert other_tenant.id != first.id
+    assert other_tenant.queue_job_id
 
     listed_a, total_a = service.list_collection_jobs(
         tenant_a.id, status="queued", limit=10, offset=0
@@ -557,6 +560,14 @@ def test_collection_job_create_idempotency_and_tenant_scoping(tmp_path: Path) ->
             .all()
         )
         assert len(rows) == 1
+    assert len(queue.jobs) == 2
+    first_task, first_payload, first_queue_job_id = queue.jobs[0]
+    second_task, second_payload, _second_queue_job_id = queue.jobs[1]
+    assert first_task == "invplatform.saas.tasks.run_collection_job_task"
+    assert second_task == "invplatform.saas.tasks.run_collection_job_task"
+    assert first_payload["collection_job_id"] == first.id
+    assert second_payload["collection_job_id"] == other_tenant.id
+    assert first_queue_job_id == first.queue_job_id
 
 
 def test_collection_job_validation_errors(tmp_path: Path) -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,6 +10,7 @@ from sqlalchemy import select
 from invplatform.saas.db import build_engine, build_session_factory
 from invplatform.saas.models import (
     Base,
+    CollectionJob,
     FileStatus,
     InvoiceFile,
     InvoiceRecord,
@@ -20,6 +22,8 @@ from invplatform.saas.queue import InMemoryJobQueue
 from invplatform.saas.service import SaaSService
 from invplatform.saas.storage import LocalStorageBackend
 from invplatform.saas.worker import (
+    CollectedProviderFile,
+    run_collection_job,
     run_parse_job,
     run_report_job,
     run_report_retention_cleanup,
@@ -178,6 +182,129 @@ def test_list_invoices_is_tenant_scoped(tmp_path: Path) -> None:
     items_b, total_b = service.list_invoices(tenant_id=tenant_b.id)
     assert total_a == 1 and len(items_a) == 1 and items_a[0].vendor == "Alpha Vendor"
     assert total_b == 1 and len(items_b) == 1 and items_b[0].vendor == "Beta Vendor"
+
+
+def test_run_collection_job_creates_files_and_parse_jobs(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    tenant, _key = service.bootstrap_tenant("Acme Ltd")
+    queue = service.queue
+    assert isinstance(queue, InMemoryJobQueue)
+
+    provider = service.create_provider_config(
+        tenant.id,
+        provider_type="gmail",
+        connection_status="connected",
+    )
+    start = service.start_provider_oauth(
+        tenant.id,
+        provider.id,
+        redirect_uri="https://app.example.test/oauth/callback",
+    )
+    service.complete_provider_oauth_callback(
+        tenant.id,
+        start.provider.id,
+        state=start.state,
+        code="code-1",
+    )
+
+    collection_job = service.create_collection_job(
+        tenant.id,
+        providers=["gmail"],
+        month_scope="2026-04",
+        idempotency_key="collection-parse-wiring",
+    )
+    queue.jobs.clear()  # isolate orchestration side effects from create enqueue
+
+    storage = LocalStorageBackend(tmp_path / "collection-storage")
+
+    def provider_executor(
+        _provider, _month_scope: str, _collection_job_id: str
+    ) -> list[CollectedProviderFile]:
+        return [
+            CollectedProviderFile(filename="invoice-001.pdf", content=b"%PDF-1.4\n")
+        ]
+
+    status = run_collection_job(
+        session_factory=service.session_factory,
+        collection_job_id=collection_job.id,
+        storage_backend=storage,
+        queue=queue,
+        provider_executor=provider_executor,
+    )
+    assert status.value == "succeeded"
+    assert len(queue.jobs) == 1
+    task_name, payload, _queue_job_id = queue.jobs[0]
+    assert task_name == "invplatform.saas.tasks.run_parse_job_task"
+    assert payload["parse_job_id"]
+
+    with service.session_factory() as session:
+        row = session.execute(
+            select(CollectionJob).where(CollectionJob.id == collection_job.id)
+        ).scalar_one()
+        assert row.status == "succeeded"
+        assert row.files_discovered == 1
+        assert row.files_downloaded == 1
+        parse_job_ids = json.loads(row.parse_job_ids_json)
+        assert isinstance(parse_job_ids, list)
+        assert len(parse_job_ids) == 1
+        parse_job = session.execute(
+            select(ParseJob).where(ParseJob.id == parse_job_ids[0])
+        ).scalar_one()
+        assert parse_job.status == "queued"
+        assert parse_job.queue_job_id
+        file_row = session.execute(
+            select(InvoiceFile).where(InvoiceFile.tenant_id == tenant.id)
+        ).scalar_one()
+        assert storage.resolve_local_path(file_row.storage_path).exists()
+
+    second_run = run_collection_job(
+        session_factory=service.session_factory,
+        collection_job_id=collection_job.id,
+        storage_backend=storage,
+        queue=queue,
+        provider_executor=provider_executor,
+    )
+    assert second_run.value == "succeeded"
+    assert len(queue.jobs) == 1
+
+
+def test_run_collection_job_failed_for_unconnected_provider(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    tenant, _key = service.bootstrap_tenant("Acme Ltd")
+    queue = service.queue
+    assert isinstance(queue, InMemoryJobQueue)
+
+    service.create_provider_config(
+        tenant.id,
+        provider_type="gmail",
+        connection_status="disconnected",
+    )
+    collection_job = service.create_collection_job(
+        tenant.id,
+        providers=["gmail"],
+        month_scope="2026-04",
+        idempotency_key="collection-failed-provider",
+    )
+    queue.jobs.clear()
+
+    status = run_collection_job(
+        session_factory=service.session_factory,
+        collection_job_id=collection_job.id,
+        queue=queue,
+    )
+    assert status.value == "failed"
+    assert queue.jobs == []
+
+    with service.session_factory() as session:
+        row = session.execute(
+            select(CollectionJob).where(CollectionJob.id == collection_job.id)
+        ).scalar_one()
+        assert row.status == "failed"
+        assert row.files_discovered == 0
+        assert row.files_downloaded == 0
+        assert json.loads(row.parse_job_ids_json) == []
+        assert row.error_message is not None
+        assert "PROVIDER_NOT_CONNECTED" in row.error_message
 
 
 def test_run_report_job_generates_artifacts(tmp_path: Path) -> None:
