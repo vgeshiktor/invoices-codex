@@ -142,3 +142,10 @@ Collection orchestration worker behavior:
    - `succeeded` when all providers complete without failures.
    - `failed` when any provider fails or no files are downloaded.
 6. Failure details are serialized in `error_message` as a UI-safe JSON payload.
+
+## 7. FE Compatibility Notes
+
+- Provider settings flows are unchanged for `Connect`, `Disconnect`, and `Re-auth`.
+- Supported provider types remain `'gmail'` and `'outlook'`.
+- Collection execution requires provider state `'connected'`; providers in `'disconnected'` or `'error'` state fail with a structured provider failure.
+- FE-201 failure-path behavior remains: `renders a recoverable action error when connect fails`.
