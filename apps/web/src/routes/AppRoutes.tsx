@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { AppShell } from '../components/shell/AppShell';
 import { DashboardPage } from '../pages/DashboardPage';
+import { CollectionRunDetailPage } from '../pages/CollectionRunDetailPage';
 import { CollectionWizardPage } from '../pages/CollectionWizardPage';
 import { ProviderSettingsScreen } from '../features/providers/components/ProviderSettingsScreen';
 import { ReportCreationScreen } from '../features/reports/components/ReportCreationScreen';
@@ -20,6 +21,7 @@ export function AppRoutes() {
           <Route element={<DashboardPage />} path="/dashboard" />
           <Route element={<ProviderSettingsScreen />} path="/providers" />
           <Route element={<CollectionWizardPage />} path="/collections" />
+          <Route element={<CollectionRunDetailPage />} path="/collections/:collectionJobId" />
           <Route element={<ReportCreationScreen />} path="/reports" />
           <Route element={<PlaceholderPage title="Settings" />} path="/settings" />
         </Route>
