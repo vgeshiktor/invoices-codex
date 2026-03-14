@@ -113,6 +113,21 @@ test('supports login, protected navigation, and logout flow', async ({ page }) =
     });
   });
 
+  await page.route('**/v1/collection-jobs', async (route) => {
+    await route.fulfill({
+      body: JSON.stringify({
+        created_at: '2026-03-20T09:00:00+00:00',
+        id: 'col-e2e-1',
+        month_scope: '2026-03',
+        providers: ['gmail', 'outlook'],
+        status: 'queued',
+        updated_at: '2026-03-20T09:00:00+00:00',
+      }),
+      headers: authHeaders,
+      status: 201,
+    });
+  });
+
   await page.goto('/');
 
   await expect(page.getByRole('heading', { name: 'Login' })).toBeVisible();
@@ -127,6 +142,11 @@ test('supports login, protected navigation, and logout flow', async ({ page }) =
   await expect(page.getByRole('heading', { name: 'Collect current month' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Start collection run' })).toBeVisible();
   await expect(page.getByLabel('Month scope')).toBeVisible();
+  await page.getByRole('button', { name: 'Start collection run' }).click();
+  await expect(page.getByRole('heading', { name: 'Run started' })).toBeVisible();
+  // Expect API to return status 'queued' for the initial run.
+  await expect(page.getByText(/queued/i)).toBeVisible();
+  // CollectionWizardPage integration test already "shows error state when submit request fails".
 
   await page.getByRole('button', { name: 'Sign out' }).click();
   await expect(page.getByRole('heading', { name: 'Login' })).toBeVisible();
