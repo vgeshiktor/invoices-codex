@@ -114,6 +114,15 @@ export function CollectionRunDetailPage({
     let isCancelled = false;
     let timeoutId: number | undefined;
 
+    queueMicrotask(() => {
+      if (isCancelled) {
+        return;
+      }
+      setIsLoading(true);
+      setJob(null);
+      setLoadError(null);
+    });
+
     const load = async () => {
       const result = await loadCollectionJob(resolvedCollectionJobId);
       if (isCancelled) {
