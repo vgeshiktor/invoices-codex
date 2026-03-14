@@ -5,10 +5,6 @@ import { RouteStatusPage } from '../pages/RouteStatusPage';
 export function ProtectedRoute() {
   const { retry, status } = useAuthStub();
 
-  if (status === 'loading') {
-    return <RouteStatusPage message="Checking session..." title="Loading session" />;
-  }
-
   if (status === 'error') {
     return (
       <RouteStatusPage

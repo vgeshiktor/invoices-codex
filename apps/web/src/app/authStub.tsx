@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { AuthStubContext, type AuthStubContextValue } from './authStub.context';
 import { AUTH_STUB_STORAGE_KEY, type AuthStubStatus } from './authStub.constants';
 
-const resolveStoredStatus = (): Exclude<AuthStubStatus, 'loading'> => {
+const resolveStoredStatus = (): AuthStubStatus => {
   const raw = window.localStorage.getItem(AUTH_STUB_STORAGE_KEY);
 
   if (raw === null || raw === 'unauthenticated') {
