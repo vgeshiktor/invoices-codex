@@ -13,6 +13,7 @@ from .metrics import MetricsRegistry
 from .models import (
     ApiKey,
     Base,
+    CollectionJob,
     InvoiceRecord,
     ParseJob,
     ProviderConfig,
@@ -21,7 +22,13 @@ from .models import (
     Tenant,
 )
 from .queue import build_queue
-from .service import AuthError, ProviderConfigError, SaaSService, ServiceConfig
+from .service import (
+    AuthError,
+    CollectionJobError,
+    ProviderConfigError,
+    SaaSService,
+    ServiceConfig,
+)
 from .storage import StorageBackend, build_storage
 
 logger = logging.getLogger(__name__)
@@ -102,6 +109,50 @@ def _job_to_dict(job: ParseJob) -> dict[str, object]:
         "created_at": _iso(job.created_at),
         "started_at": _iso(job.started_at),
         "finished_at": _iso(job.finished_at),
+    }
+
+
+def _collection_job_to_dict(row: CollectionJob) -> dict[str, object]:
+    providers: list[str] = []
+    parse_job_ids: list[str] = []
+    try:
+        loaded_providers = json.loads(row.providers_json)
+        if isinstance(loaded_providers, list):
+            providers = [str(value) for value in loaded_providers]
+    except json.JSONDecodeError:
+        logger.warning(
+            "Failed to decode providers_json for collection_job_id=%s tenant_id=%s",
+            row.id,
+            row.tenant_id,
+            exc_info=True,
+        )
+    try:
+        loaded_parse_job_ids = json.loads(row.parse_job_ids_json)
+        if isinstance(loaded_parse_job_ids, list):
+            parse_job_ids = [str(value) for value in loaded_parse_job_ids]
+    except json.JSONDecodeError:
+        logger.warning(
+            "Failed to decode parse_job_ids_json for collection_job_id=%s tenant_id=%s",
+            row.id,
+            row.tenant_id,
+            exc_info=True,
+        )
+    return {
+        "id": row.id,
+        "tenant_id": row.tenant_id,
+        "status": row.status,
+        "idempotency_key": row.idempotency_key,
+        "providers": providers,
+        "month_scope": row.month_scope,
+        "queue_job_id": row.queue_job_id,
+        "started_at": _iso(row.started_at),
+        "finished_at": _iso(row.finished_at),
+        "files_discovered": row.files_discovered,
+        "files_downloaded": row.files_downloaded,
+        "parse_job_ids": parse_job_ids,
+        "error_message": row.error_message,
+        "created_at": _iso(row.created_at),
+        "updated_at": _iso(row.updated_at),
     }
 
 
@@ -259,6 +310,10 @@ def create_app(config: ApiAppConfig | None = None):
         file_ids: list[str]
         debug: bool = False
 
+    class CollectionJobCreateRequest(BaseModel):
+        providers: list[str]
+        month_scope: str
+
     class ReportRequest(BaseModel):
         parse_job_ids: list[str] | None = None
         formats: list[str] | None = None
@@ -351,6 +406,14 @@ def create_app(config: ApiAppConfig | None = None):
             "PROVIDER_OAUTH_STATE_EXPIRED": 400,
             "PROVIDER_OAUTH_CONFIG_ERROR": 503,
             "PROVIDER_CONFIG_ERROR": 500,
+        }
+        return HTTPException(status_code=status_by_code.get(exc.code, 400), detail=exc.message)
+
+    def _collection_http_exception(exc: CollectionJobError) -> HTTPException:
+        status_by_code = {
+            "COLLECTION_NOT_FOUND": 404,
+            "COLLECTION_CONFLICT": 409,
+            "COLLECTION_VALIDATION_ERROR": 400,
         }
         return HTTPException(status_code=status_by_code.get(exc.code, 400), detail=exc.message)
 
@@ -762,6 +825,63 @@ def create_app(config: ApiAppConfig | None = None):
         except ProviderConfigError as exc:
             raise _provider_http_exception(exc) from exc
         return _provider_to_dict(item)
+
+    @app.post("/v1/collection-jobs", status_code=201)
+    def create_collection_job(
+        payload: CollectionJobCreateRequest,
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        tenant_id: str = Depends(get_tenant_id),
+        actor: str | None = Depends(get_actor),
+        service: SaaSService = Depends(get_service),
+    ) -> dict[str, object]:
+        try:
+            row = service.create_collection_job(
+                tenant_id=tenant_id,
+                providers=payload.providers,
+                month_scope=payload.month_scope,
+                idempotency_key=idempotency_key,
+                actor=actor,
+            )
+        except CollectionJobError as exc:
+            raise _collection_http_exception(exc) from exc
+        return _collection_job_to_dict(row)
+
+    @app.get("/v1/collection-jobs")
+    def list_collection_jobs(
+        status: str | None = Query(default=None),
+        limit: int = Query(default=100, ge=1, le=1000),
+        offset: int = Query(default=0, ge=0),
+        tenant_id: str = Depends(get_tenant_id),
+        service: SaaSService = Depends(get_service),
+    ) -> dict[str, object]:
+        try:
+            items, total = service.list_collection_jobs(
+                tenant_id=tenant_id,
+                status=status,
+                limit=limit,
+                offset=offset,
+            )
+        except CollectionJobError as exc:
+            raise _collection_http_exception(exc) from exc
+        return {
+            "items": [_collection_job_to_dict(item) for item in items],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
+
+    @app.get("/v1/collection-jobs/{collection_job_id}")
+    def get_collection_job(
+        collection_job_id: str,
+        tenant_id: str = Depends(get_tenant_id),
+        service: SaaSService = Depends(get_service),
+    ) -> dict[str, object]:
+        row = service.get_collection_job(
+            tenant_id=tenant_id, collection_job_id=collection_job_id
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail="collection job not found")
+        return _collection_job_to_dict(row)
 
     @app.get("/dashboard", include_in_schema=False)
     def dashboard_page():

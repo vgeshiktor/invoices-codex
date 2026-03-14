@@ -6,7 +6,13 @@ import pytest
 from sqlalchemy import select
 
 from invplatform.saas.db import TenantGuardError, build_engine, build_session_factory
-from invplatform.saas.models import Base, InvoiceRecord, ProviderConfig, Tenant
+from invplatform.saas.models import (
+    CollectionJob,
+    Base,
+    InvoiceRecord,
+    ProviderConfig,
+    Tenant,
+)
 
 
 def test_tenant_guard_blocks_tenantless_scoped_select(tmp_path: Path) -> None:
@@ -62,6 +68,22 @@ def test_tenant_guard_blocks_tenantless_scoped_select(tmp_path: Path) -> None:
                 config_json="{}",
             )
         )
+        session.add(
+            CollectionJob(
+                tenant_id=t1.id,
+                status="queued",
+                providers_json='["gmail"]',
+                month_scope="2026-04",
+            )
+        )
+        session.add(
+            CollectionJob(
+                tenant_id=t2.id,
+                status="failed",
+                providers_json='["outlook"]',
+                month_scope="2026-04",
+            )
+        )
         session.commit()
 
     with session_factory() as session:
@@ -69,6 +91,8 @@ def test_tenant_guard_blocks_tenantless_scoped_select(tmp_path: Path) -> None:
             session.execute(select(InvoiceRecord)).scalars().all()
         with pytest.raises(TenantGuardError):
             session.execute(select(ProviderConfig)).scalars().all()
+        with pytest.raises(TenantGuardError):
+            session.execute(select(CollectionJob)).scalars().all()
 
 
 def test_tenant_guard_auto_filters_by_session_tenant(tmp_path: Path) -> None:
@@ -124,6 +148,22 @@ def test_tenant_guard_auto_filters_by_session_tenant(tmp_path: Path) -> None:
                 config_json="{}",
             )
         )
+        session.add(
+            CollectionJob(
+                tenant_id=t1.id,
+                status="queued",
+                providers_json='["gmail"]',
+                month_scope="2026-04",
+            )
+        )
+        session.add(
+            CollectionJob(
+                tenant_id=t2.id,
+                status="running",
+                providers_json='["outlook"]',
+                month_scope="2026-04",
+            )
+        )
         session.commit()
         session.info["tenant_id"] = t1.id
         rows = list(session.execute(select(InvoiceRecord)).scalars().all())
@@ -132,3 +172,6 @@ def test_tenant_guard_auto_filters_by_session_tenant(tmp_path: Path) -> None:
         providers = list(session.execute(select(ProviderConfig)).scalars().all())
         assert len(providers) == 1
         assert providers[0].provider_type == "gmail"
+        collection_jobs = list(session.execute(select(CollectionJob)).scalars().all())
+        assert len(collection_jobs) == 1
+        assert collection_jobs[0].status == "queued"

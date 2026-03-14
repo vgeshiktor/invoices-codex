@@ -275,6 +275,7 @@ def test_openapi_exposes_api_key_security_scheme(tmp_path: Path) -> None:
     assert "/v1/providers/{provider_id}/oauth/callback" in body["paths"]
     assert "/v1/providers/{provider_id}/oauth/refresh" in body["paths"]
     assert "/v1/providers/{provider_id}/oauth/revoke" in body["paths"]
+    assert "/v1/collection-jobs" in body["paths"]
     assert "/v1/control-plane/tenants" in body["paths"]
     assert body["paths"]["/v1/files"]["post"]["security"] == [{"ApiKeyAuth": []}]
     assert body["paths"]["/v1/providers"]["get"]["security"] == [{"ApiKeyAuth": []}]
@@ -290,6 +291,9 @@ def test_openapi_exposes_api_key_security_scheme(tmp_path: Path) -> None:
     assert body["paths"]["/v1/providers/{provider_id}/oauth/revoke"]["post"][
         "security"
     ] == [{"ApiKeyAuth": []}]
+    assert body["paths"]["/v1/collection-jobs"]["get"]["security"] == [
+        {"ApiKeyAuth": []}
+    ]
     assert body["paths"]["/v1/control-plane/tenants"]["get"]["security"] == [
         {"ControlPlaneKeyAuth": []}
     ]
@@ -595,6 +599,103 @@ def test_provider_oauth_lifecycle_endpoints(tmp_path: Path) -> None:
     )
     assert revoke_missing.status_code == 404
     assert revoke_missing.json()["detail"] == "provider config not found"
+
+
+def test_collection_jobs_create_list_get_and_tenant_isolation(tmp_path: Path) -> None:
+    client, api_key, _tenant_id = _client(tmp_path)
+    app = cast(Any, client.app)
+    _other_tenant, other_key = app.state.service.bootstrap_tenant("Other Tenant")
+    headers = {"X-API-Key": api_key, "X-Actor": "owner"}
+
+    created = client.post(
+        "/v1/collection-jobs",
+        headers={**headers, "Idempotency-Key": "collect-1"},
+        json={"providers": ["gmail", "outlook"], "month_scope": "2026-04"},
+    )
+    assert created.status_code == 201
+    body = created.json()
+    collection_job_id = body["id"]
+    assert body["status"] == "queued"
+    assert body["month_scope"] == "2026-04"
+    assert body["providers"] == ["gmail", "outlook"]
+    assert body["files_discovered"] == 0
+    assert body["files_downloaded"] == 0
+    assert body["parse_job_ids"] == []
+
+    idempotent = client.post(
+        "/v1/collection-jobs",
+        headers={**headers, "Idempotency-Key": "collect-1"},
+        json={"providers": ["gmail"], "month_scope": "2026-05"},
+    )
+    assert idempotent.status_code == 201
+    assert idempotent.json()["id"] == collection_job_id
+
+    listing = client.get(
+        "/v1/collection-jobs?status=queued&limit=10&offset=0",
+        headers={"X-API-Key": api_key},
+    )
+    assert listing.status_code == 200
+    list_body = listing.json()
+    assert list_body["total"] == 1
+    assert list_body["items"][0]["id"] == collection_job_id
+
+    details = client.get(
+        f"/v1/collection-jobs/{collection_job_id}",
+        headers={"X-API-Key": api_key},
+    )
+    assert details.status_code == 200
+    assert details.json()["id"] == collection_job_id
+
+    other_listing = client.get("/v1/collection-jobs", headers={"X-API-Key": other_key})
+    assert other_listing.status_code == 200
+    assert other_listing.json()["total"] == 0
+
+    other_details = client.get(
+        f"/v1/collection-jobs/{collection_job_id}",
+        headers={"X-API-Key": other_key},
+    )
+    assert other_details.status_code == 404
+    assert other_details.json()["detail"] == "collection job not found"
+
+
+def test_collection_jobs_validation_and_not_found(tmp_path: Path) -> None:
+    client, api_key, _tenant_id = _client(tmp_path)
+    headers = {"X-API-Key": api_key}
+
+    invalid_providers = client.post(
+        "/v1/collection-jobs",
+        headers=headers,
+        json={"providers": [], "month_scope": "2026-04"},
+    )
+    assert invalid_providers.status_code == 400
+    assert "providers" in invalid_providers.json()["detail"]
+
+    invalid_provider_entry = client.post(
+        "/v1/collection-jobs",
+        headers=headers,
+        json={"providers": ["gmail", "dropbox"], "month_scope": "2026-04"},
+    )
+    assert invalid_provider_entry.status_code == 400
+    assert "providers must only contain" in invalid_provider_entry.json()["detail"]
+
+    invalid_month_scope = client.post(
+        "/v1/collection-jobs",
+        headers=headers,
+        json={"providers": ["gmail"], "month_scope": "2026-13"},
+    )
+    assert invalid_month_scope.status_code == 400
+    assert invalid_month_scope.json()["detail"] == "month_scope must match YYYY-MM"
+
+    invalid_status = client.get(
+        "/v1/collection-jobs?status=not-real",
+        headers=headers,
+    )
+    assert invalid_status.status_code == 400
+    assert "status must be one of" in invalid_status.json()["detail"]
+
+    missing = client.get("/v1/collection-jobs/not-found", headers=headers)
+    assert missing.status_code == 404
+    assert missing.json()["detail"] == "collection job not found"
 
 
 def test_control_plane_tenant_bootstrap_and_listing(tmp_path: Path) -> None:

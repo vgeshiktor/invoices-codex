@@ -1,47 +1,52 @@
 {
   "requirements": [
     {
-      "source": "docs/contracts/PROVIDER_WEEK3_CONTRACT.md",
-      "requirement": "OAuth lifecycle endpoints are implemented for providers",
-      "scope": "diff",
-      "patterns": [
-        "/oauth/start",
-        "/oauth/callback",
-        "/oauth/refresh",
-        "/oauth/revoke"
-      ],
-      "on_missing": "FAIL"
-    },
-    {
       "source": "docs/ARCHITECTURE.md",
-      "requirement": "Architecture documents tenant-scoped provider OAuth lifecycle",
+      "requirement": "CollectionJob entity is added to SaaS domain model",
       "scope": "diff",
       "patterns": [
-        "Provider OAuth Lifecycle",
-        "tenant-scoped",
-        "_oauth_"
+        "class CollectionJob\\(Base\\)",
+        "__tablename__ = \"saas_collection_jobs\""
       ],
       "on_missing": "FAIL"
     },
     {
-      "source": "tests/test_saas_api.py",
-      "requirement": "API tests cover OAuth lifecycle happy and failure paths",
+      "source": "docs/FRONTEND_WEEK4_EXECUTION_PLAN.md",
+      "requirement": "Collection jobs create endpoint is implemented",
       "scope": "diff",
       "patterns": [
-        "test_provider_oauth_lifecycle_endpoints",
-        "invalid_start",
-        "refresh_after_revoke"
+        "@app.post\\(\"/v1/collection-jobs\"",
+        "def create_collection_job\\("
       ],
       "on_missing": "FAIL"
     },
     {
-      "source": "tests/test_saas_service.py",
-      "requirement": "Service tests cover OAuth lifecycle error handling",
+      "source": "docs/FRONTEND_WEEK4_EXECUTION_PLAN.md",
+      "requirement": "Collection jobs list/get endpoints are implemented",
       "scope": "diff",
       "patterns": [
-        "test_provider_oauth_lifecycle_and_errors",
-        "oauth state is missing or invalid",
-        "provider is not connected"
+        "@app.get\\(\"/v1/collection-jobs\"\\)",
+        "@app.get\\(\"/v1/collection-jobs/\\{collection_job_id\\}\"\\)"
+      ],
+      "on_missing": "FAIL"
+    },
+    {
+      "source": "docs/FRONTEND_WEEK4_EXECUTION_PLAN.md",
+      "requirement": "Collection create endpoint supports idempotency",
+      "scope": "diff",
+      "patterns": [
+        "scope=\"collection_jobs.create\"",
+        "IdempotencyRecord\\("
+      ],
+      "on_missing": "FAIL"
+    },
+    {
+      "source": "docs/PRD_V1_SAAS.md",
+      "requirement": "Collection lifecycle requirement is documented",
+      "scope": "diff",
+      "patterns": [
+        "FR-9 Collection run lifecycle",
+        "Journey E: Collection Run Tracking"
       ],
       "on_missing": "FAIL"
     }

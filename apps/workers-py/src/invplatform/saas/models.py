@@ -51,6 +51,13 @@ class ReportStatus(str, Enum):
     FAILED = "failed"
 
 
+class CollectionJobStatus(str, Enum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
 class Tenant(Base):
     __tablename__ = "saas_tenants"
 
@@ -223,6 +230,39 @@ class ParseJob(Base):
     error_message: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, nullable=False
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class CollectionJob(Base):
+    __tablename__ = "saas_collection_jobs"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "idempotency_key", name="uq_saas_collection_jobs_idempotency"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("saas_tenants.id"), nullable=False, index=True
+    )
+    status: Mapped[str] = mapped_column(
+        String(32), default=CollectionJobStatus.QUEUED.value, nullable=False, index=True
+    )
+    idempotency_key: Mapped[str | None] = mapped_column(String(128))
+    providers_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    month_scope: Mapped[str] = mapped_column(String(7), nullable=False, index=True)
+    queue_job_id: Mapped[str | None] = mapped_column(String(64))
+    files_discovered: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    files_downloaded: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    parse_job_ids_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, nullable=False
     )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
