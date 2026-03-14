@@ -42,6 +42,7 @@ from .repository import TenantScopedRepository
 PARSE_JOB_TASK = "invplatform.saas.tasks.run_parse_job_task"
 REPORT_JOB_TASK = "invplatform.saas.tasks.run_report_job_task"
 REPORT_CLEANUP_TASK = "invplatform.saas.tasks.run_report_retention_cleanup_task"
+COLLECTION_JOB_TASK = "invplatform.saas.tasks.run_collection_job_task"
 _REPORT_ALLOWED_FORMATS = {"json", "csv", "summary_csv", "pdf"}
 _PROVIDER_ALLOWED_TYPES = {"gmail", "outlook"}
 _PROVIDER_ALLOWED_STATUSES = {"connected", "disconnected", "error"}
@@ -118,6 +119,7 @@ class ServiceConfig:
     parse_job_task_name: str = PARSE_JOB_TASK
     report_job_task_name: str = REPORT_JOB_TASK
     report_cleanup_task_name: str = REPORT_CLEANUP_TASK
+    collection_job_task_name: str = COLLECTION_JOB_TASK
     auth_access_token_secret: str | None = None
     auth_access_token_ttl_seconds: int = 900
     auth_refresh_token_ttl_seconds: int = 30 * 24 * 60 * 60
@@ -1406,6 +1408,11 @@ class SaaSService:
                 )
                 session.add(row)
                 session.flush()
+                queue_job_id = self.queue.enqueue(
+                    self.config.collection_job_task_name,
+                    {"collection_job_id": row.id},
+                )
+                row.queue_job_id = queue_job_id
 
                 if normalized_key is not None:
                     session.add(
@@ -1429,6 +1436,7 @@ class SaaSService:
                                 "month_scope": normalized_month_scope,
                                 "status": row.status,
                                 "idempotency_key": normalized_key,
+                                "queue_job_id": queue_job_id,
                             }
                         ),
                     )

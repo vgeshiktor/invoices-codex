@@ -4,7 +4,12 @@ import os
 
 from .db import build_engine, build_session_factory
 from .models import Base
-from .worker import run_parse_job, run_report_job, run_report_retention_cleanup
+from .worker import (
+    run_collection_job,
+    run_parse_job,
+    run_report_job,
+    run_report_retention_cleanup,
+)
 
 
 def _session_factory_from_env(database_url: str | None = None):
@@ -18,6 +23,16 @@ def run_parse_job_task(payload: dict[str, str], database_url: str | None = None)
     parse_job_id = payload["parse_job_id"]
     session_factory = _session_factory_from_env(database_url)
     status = run_parse_job(session_factory=session_factory, parse_job_id=parse_job_id)
+    return status.value
+
+
+def run_collection_job_task(payload: dict[str, str], database_url: str | None = None) -> str:
+    collection_job_id = payload["collection_job_id"]
+    session_factory = _session_factory_from_env(database_url)
+    status = run_collection_job(
+        session_factory=session_factory,
+        collection_job_id=collection_job_id,
+    )
     return status.value
 
 

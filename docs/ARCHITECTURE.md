@@ -92,6 +92,16 @@ Out of scope:
 4. Worker writes artifact metadata and marks report `succeeded`.
 5. Client fetches metadata (`GET /v1/reports/{id}`) and downloads artifact.
 
+### 5.3 Collection Orchestration Flow
+
+1. Client creates a collection job (`POST /v1/collection-jobs`) with providers and month scope.
+2. API writes `CollectionJob(queued)`, enqueues collection task, and returns `queue_job_id`.
+3. Worker executes provider collectors per tenant/provider, persists discovered files, and records counters.
+4. Worker creates tenant-scoped parse jobs linked to collected files and enqueues parse tasks.
+5. Worker updates collection job with `parse_job_ids`, counters, and terminal status:
+   - `succeeded` when providers complete without failures.
+   - `failed` with normalized provider failure details in `error_message`.
+
 ## 6. Security Model (MVP)
 
 - Auth: tenant-scoped API key in `X-API-Key`.

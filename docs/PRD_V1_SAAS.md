@@ -75,6 +75,9 @@ FR-8 Auditing:
 FR-9 Collection run lifecycle:
 - Client can create and query tenant-scoped collection jobs with explicit lifecycle status (`queued/running/succeeded/failed`).
 
+FR-10 Collection orchestration:
+- Collection runs persist discovered/downloaded file counters, create linked parse jobs, and expose normalized failure details for frontend status views.
+
 ## 6. Non-Functional Requirements (NFR)
 
 - Multi-tenancy: strict tenant data isolation.
@@ -119,6 +122,7 @@ Given a tenant initiates a collection run
 When client creates and queries collection jobs
 Then collection lifecycle status is persisted and queryable per tenant
 And cross-tenant collection jobs are never visible.
+And successful runs expose parse job links for downstream invoice/report flows.
 
 ## 8. MVP Milestones
 
