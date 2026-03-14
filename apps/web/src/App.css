@@ -455,12 +455,7 @@
 }
 
 .collection-run-summary__stats,
-.collection-run-summary__timeline {
-.report-detail__header h3,
-.report-detail__subheader h3 {
-  margin: 0;
-}
-
+.collection-run-summary__timeline,
 .report-detail__stats {
   display: grid;
   gap: 0.85rem;
@@ -468,8 +463,13 @@
   margin: 1rem 0 0;
 }
 
+.report-detail__header h3,
+.report-detail__subheader h3 {
+  margin: 0;
+}
+
 .collection-run-summary__stats div,
-.collection-run-summary__timeline div {
+.collection-run-summary__timeline div,
 .report-detail__stats div,
 .report-detail__artifact {
   border: 1px solid #dbe4ee;
@@ -478,7 +478,7 @@
 }
 
 .collection-run-summary__stats dt,
-.collection-run-summary__timeline dt {
+.collection-run-summary__timeline dt,
 .report-detail__stats dt {
   color: #475569;
   font-size: 0.8rem;
@@ -488,7 +488,7 @@
 }
 
 .collection-run-summary__stats dd,
-.collection-run-summary__timeline dd {
+.collection-run-summary__timeline dd,
 .report-detail__stats dd {
   color: #0f172a;
   font-size: 1rem;
