@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   createCollectionJob,
   type CollectionJob,
@@ -142,6 +143,11 @@ export function CollectionWizardPage({ submitCollectionJob = createCollectionJob
           </p>
           <p>Month scope: {createdJob.month_scope}</p>
           {requestId ? <p>request-id: {requestId}</p> : null}
+          <p>
+            <Link className="app__button" to={`/collections/${createdJob.id}`}>
+              Open run detail
+            </Link>
+          </p>
         </section>
       )}
     </section>

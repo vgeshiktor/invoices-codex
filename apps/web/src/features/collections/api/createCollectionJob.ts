@@ -11,9 +11,12 @@ export interface CollectionJob {
   month_scope: string;
   created_at?: string | null;
   updated_at?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
   error_message?: string | null;
   files_discovered?: number | null;
   files_downloaded?: number | null;
+  parse_job_ids?: string[];
 }
 
 export interface CreateCollectionJobRequest {

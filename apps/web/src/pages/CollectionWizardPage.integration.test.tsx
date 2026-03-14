@@ -1,5 +1,6 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import { CollectionWizardPage } from './CollectionWizardPage';
 import type {
@@ -28,7 +29,11 @@ describe('CollectionWizardPage', () => {
         status: 201,
       });
 
-    render(<CollectionWizardPage submitCollectionJob={submitCollectionJob} />);
+    render(
+      <MemoryRouter>
+        <CollectionWizardPage submitCollectionJob={submitCollectionJob} />
+      </MemoryRouter>,
+    );
 
     await userEvent.click(screen.getByRole('button', { name: 'Start collection run' }));
 
@@ -40,6 +45,10 @@ describe('CollectionWizardPage', () => {
       expect(screen.getByText('Run started')).toBeInTheDocument();
       expect(screen.getByText(/col-happy-1/)).toBeInTheDocument();
       expect(screen.getByText(/queued/)).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'Open run detail' })).toHaveAttribute(
+        'href',
+        '/collections/col-happy-1',
+      );
     });
   });
 
@@ -53,7 +62,11 @@ describe('CollectionWizardPage', () => {
         ok: false,
       });
 
-    render(<CollectionWizardPage submitCollectionJob={submitCollectionJob} />);
+    render(
+      <MemoryRouter>
+        <CollectionWizardPage submitCollectionJob={submitCollectionJob} />
+      </MemoryRouter>,
+    );
 
     await userEvent.click(screen.getByRole('button', { name: 'Start collection run' }));
 
