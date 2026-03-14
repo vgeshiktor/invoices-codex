@@ -172,3 +172,12 @@ Convention:
 3. Shared client wrapper consumes typed env config and injects only required headers.
 4. At least one production route uses generated types + operation function end-to-end.
 5. CI executes stale-generation guard (`npm run api:check`) in required checks.
+
+## 13. Week 3 Dependency Note (`FE-201` -> `BE-102`)
+
+- Current OpenAPI snapshot (`saas-openapi.v0.1.0.json`) does not yet expose provider OAuth lifecycle endpoints.
+- Frontend provider settings (`FE-201`) uses a contract-shaped local adapter as a temporary integration path.
+- Once `BE-102` endpoints are published in OpenAPI:
+  - regenerate client (`npm run api:generate`);
+  - replace local adapter methods with generated operations;
+  - keep UI state contracts unchanged (`connected` / `disconnected` / `error`) to minimize migration risk.
