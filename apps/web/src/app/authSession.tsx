@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   fetchMe,
   loginWithPassword,
@@ -85,123 +85,124 @@ const getSessionExpiredNotice = (errorCode?: string): string => {
   return 'Authentication required. Please sign in.';
 };
 
+type SessionFetchResult =
+  | {
+      ok: true;
+      session: AuthenticatedSession;
+    }
+  | {
+      ok: false;
+      error: AuthApiError;
+    };
+
 export function AuthSessionProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AuthState>(defaultState);
-  const isMountedRef = useRef(true);
 
-  useEffect(() => {
-    return () => {
-      isMountedRef.current = false;
-    };
+  const applyAuthenticated = useCallback((session: AuthenticatedSession) => {
+    storeAccessToken(session.accessToken);
+    setState({
+      errorMessage: null,
+      isWorking: false,
+      notice: null,
+      session,
+      status: 'authenticated',
+    });
   }, []);
 
-  const setSafeState = useCallback((nextState: AuthState) => {
-    if (!isMountedRef.current) {
-      return;
-    }
-    setState(nextState);
+  const applyUnauthenticated = useCallback((notice: string | null) => {
+    clearStoredAccessToken();
+    setState({
+      errorMessage: null,
+      isWorking: false,
+      notice,
+      session: null,
+      status: 'unauthenticated',
+    });
   }, []);
 
-  const applyAuthenticated = useCallback(
-    (session: AuthenticatedSession) => {
-      storeAccessToken(session.accessToken);
-      setSafeState({
-        errorMessage: null,
-        isWorking: false,
-        notice: null,
-        session,
-        status: 'authenticated',
-      });
-    },
-    [setSafeState],
-  );
+  const applyError = useCallback((message: string) => {
+    setState({
+      errorMessage: message,
+      isWorking: false,
+      notice: null,
+      session: null,
+      status: 'error',
+    });
+  }, []);
 
-  const applyUnauthenticated = useCallback(
-    (notice: string | null) => {
-      clearStoredAccessToken();
-      setSafeState({
-        errorMessage: null,
-        isWorking: false,
-        notice,
-        session: null,
-        status: 'unauthenticated',
-      });
-    },
-    [setSafeState],
-  );
+  const fetchSessionWithAccessToken = useCallback(
+    async (accessToken: string): Promise<SessionFetchResult> => {
+      const meResponse = await fetchMe(accessToken);
+      if (!meResponse.ok) {
+        return {
+          ok: false,
+          error: meResponse.error,
+        };
+      }
 
-  const applyError = useCallback(
-    (message: string) => {
-      setSafeState({
-        errorMessage: message,
-        isWorking: false,
-        notice: null,
-        session: null,
-        status: 'error',
-      });
-    },
-    [setSafeState],
-  );
-
-  const loadSessionFromApi = useCallback(async (): Promise<void> => {
-    const storedAccessToken = readStoredAccessToken();
-    if (!storedAccessToken) {
-      applyUnauthenticated(null);
-      return;
-    }
-
-    const meResponse = await fetchMe(storedAccessToken);
-    if (meResponse.ok) {
-      applyAuthenticated(
-        toAuthenticatedSession(storedAccessToken, {
+      return {
+        ok: true,
+        session: toAuthenticatedSession(accessToken, {
           session: meResponse.data.session,
           tenant: meResponse.data.tenant,
           user: meResponse.data.user,
         }),
-      );
+      };
+    },
+    [],
+  );
+
+  const runRefreshFlow = useCallback(async (): Promise<AuthenticatedSession | null> => {
+    const refreshResponse = await refreshAccessToken();
+    if (!refreshResponse.ok) {
+      applyUnauthenticated(getSessionExpiredNotice(refreshResponse.error.code));
+      return null;
+    }
+
+    const refreshedAccessToken = refreshResponse.data.access_token;
+    const sessionResult = await fetchSessionWithAccessToken(refreshedAccessToken);
+    if (sessionResult.ok) {
+      return sessionResult.session;
+    }
+
+    if (isUnauthorizedAuthError(sessionResult.error)) {
+      applyUnauthenticated(getSessionExpiredNotice(sessionResult.error.code));
+      return null;
+    }
+
+    applyError(sessionResult.error.message);
+    return null;
+  }, [applyError, applyUnauthenticated, fetchSessionWithAccessToken]);
+
+  const loadSessionFromApi = useCallback(async (): Promise<void> => {
+    const storedAccessToken = readStoredAccessToken();
+    if (!storedAccessToken) {
+      await Promise.resolve();
+      applyUnauthenticated(null);
       return;
     }
 
-    if (isUnauthorizedAuthError(meResponse.error)) {
-      const refreshResponse = await refreshAccessToken();
-      if (!refreshResponse.ok) {
-        applyUnauthenticated(getSessionExpiredNotice(refreshResponse.error.code));
-        return;
-      }
-
-      const refreshedAccessToken = refreshResponse.data.access_token;
-      const refreshedMeResponse = await fetchMe(refreshedAccessToken);
-      if (!refreshedMeResponse.ok) {
-        if (isUnauthorizedAuthError(refreshedMeResponse.error)) {
-          applyUnauthenticated(getSessionExpiredNotice(refreshedMeResponse.error.code));
-          return;
-        }
-
-        applyError(refreshedMeResponse.error.message);
-        return;
-      }
-
-      applyAuthenticated(
-        toAuthenticatedSession(refreshedAccessToken, {
-          session: refreshedMeResponse.data.session,
-          tenant: refreshedMeResponse.data.tenant,
-          user: refreshedMeResponse.data.user,
-        }),
-      );
+    const sessionResult = await fetchSessionWithAccessToken(storedAccessToken);
+    if (sessionResult.ok) {
+      applyAuthenticated(sessionResult.session);
       return;
     }
 
-    applyError(meResponse.error.message);
-  }, [applyAuthenticated, applyError, applyUnauthenticated]);
+    if (isUnauthorizedAuthError(sessionResult.error)) {
+      const refreshedSession = await runRefreshFlow();
+      if (refreshedSession) {
+        applyAuthenticated(refreshedSession);
+      }
+      return;
+    }
+
+    applyError(sessionResult.error.message);
+  }, [applyAuthenticated, applyError, applyUnauthenticated, fetchSessionWithAccessToken, runRefreshFlow]);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => {
+    queueMicrotask(() => {
       void loadSessionFromApi();
-    }, 0);
-
-    return () => {
-      window.clearTimeout(timer);
-    };
+    });
   }, [loadSessionFromApi]);
 
   const signIn = useCallback(
