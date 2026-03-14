@@ -5,8 +5,9 @@ import {
   reportCreationAdapter,
   type ReportCreationAdapter,
 } from '../api/reportCreationAdapter';
-import type { ReportArtifact, ReportItem, ReportStatus } from '../model/report';
+import type { ReportItem, ReportStatus } from '../model/report';
 import { isTerminalReportStatus } from '../model/report';
+import { ReportArtifactDownloads } from './ReportArtifactDownloads';
 
 type ReportDetailScreenProps = {
   adapter?: ReportCreationAdapter;
@@ -36,9 +37,6 @@ const formatTimestamp = (value: string | null): string => {
     timeStyle: 'short',
   }).format(new Date(parsed));
 };
-
-const formatArtifactBytes = (artifact: ReportArtifact): string =>
-  artifact.bytes === null ? 'Size unavailable' : `${artifact.bytes.toLocaleString()} bytes`;
 
 export function ReportDetailScreen({
   adapter = reportCreationAdapter,
@@ -229,14 +227,11 @@ export function ReportDetailScreen({
             {report.artifacts.length === 0 ? (
               <p>No artifacts available yet.</p>
             ) : (
-              <ul className="report-detail__artifact-list">
-                {report.artifacts.map((artifact) => (
-                  <li className="report-detail__artifact" key={artifact.id}>
-                    <strong>{artifact.format}</strong>
-                    <span>{formatArtifactBytes(artifact)}</span>
-                  </li>
-                ))}
-              </ul>
+              <ReportArtifactDownloads
+                artifacts={report.artifacts}
+                reportId={report.id}
+                requestedFormats={report.requestedFormats}
+              />
             )}
           </section>
 
