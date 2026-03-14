@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import { ReportCreationScreen } from './ReportCreationScreen';
 import type { ReportCreationAdapter } from '../api/reportCreationAdapter';
@@ -20,10 +21,7 @@ const createReport = (overrides?: Partial<ReportItem>): ReportItem => ({
 });
 
 const buildAdapter = (
-  overrides?: Partial<{
-    createReport: ReportCreationAdapter['createReport'];
-    listReports: ReportCreationAdapter['listReports'];
-  }>,
+  overrides?: Partial<ReportCreationAdapter>,
 ): ReportCreationAdapter => ({
   createReport:
     overrides?.createReport ??
@@ -36,6 +34,18 @@ const buildAdapter = (
     (async () => ({
       ok: true,
       data: [],
+    })),
+  getReport:
+    overrides?.getReport ??
+    (async () => ({
+      ok: true,
+      data: createReport(),
+    })),
+  retryReport:
+    overrides?.retryReport ??
+    (async () => ({
+      ok: true,
+      data: createReport(),
     })),
 });
 
@@ -55,7 +65,11 @@ describe('ReportCreationScreen', () => {
       listReports: listReportsMock,
     });
 
-    render(<ReportCreationScreen adapter={adapter} />);
+    render(
+      <MemoryRouter>
+        <ReportCreationScreen adapter={adapter} />
+      </MemoryRouter>,
+    );
 
     await screen.findByText('No reports created yet.');
 
@@ -76,6 +90,10 @@ describe('ReportCreationScreen', () => {
       });
       expect(screen.getByText('Report queued')).toBeInTheDocument();
       expect(screen.getAllByText('report-123')).toHaveLength(2);
+      expect(screen.getByRole('link', { name: 'Open detail' })).toHaveAttribute(
+        'href',
+        '/reports/report-123',
+      );
     });
 
     expect(listReportsMock).toHaveBeenCalledTimes(2);
@@ -95,7 +113,11 @@ describe('ReportCreationScreen', () => {
 
     const adapter = buildAdapter({ createReport: createReportMock });
 
-    render(<ReportCreationScreen adapter={adapter} />);
+    render(
+      <MemoryRouter>
+        <ReportCreationScreen adapter={adapter} />
+      </MemoryRouter>,
+    );
 
     await screen.findByText('No reports created yet.');
     await userEvent.click(screen.getByRole('button', { name: 'Create report' }));
@@ -128,7 +150,11 @@ describe('ReportCreationScreen', () => {
       listReports: listReportsMock,
     });
 
-    render(<ReportCreationScreen adapter={adapter} />);
+    render(
+      <MemoryRouter>
+        <ReportCreationScreen adapter={adapter} />
+      </MemoryRouter>,
+    );
 
     await screen.findByText('No reports created yet.');
 
