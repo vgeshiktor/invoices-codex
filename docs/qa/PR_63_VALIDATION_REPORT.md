@@ -19,7 +19,7 @@ Repository: vgeshiktor/invoices-codex
 | 2 | PR summary follows documentation guidelines | PASS | Required sections found: problem, design, testing, rollout/risk. |
 | 3 | Commit messages follow naming convention | PASS | All commit headlines match convention. |
 | 4 | Reviewer guide exists and is actionable | PASS | Reviewer guide section found. |
-| 5 | File-level changes are scoped/aligned | PASS | Changed files: 17. Top files: apps/web/README.md (+28/-0);apps/web/e2e/testing-pyramid.e2e.spec.ts (+4/-0);apps/web/package-lock.json (+46/-2);apps/web/package.json (+2/-1);apps/web/src/App.css (+129/-15);apps/web/src/App.tsx (+8/-89);apps/web/src/app/authStub.constants.ts (+3/-0);apps/web/src/app/authStub.context.ts (+19/-0);apps/web/src/app/authStub.tsx (+39/-0);apps/web/src/app/route-guard.unit.test.tsx (+42/-0);apps/web/src/components/shell/AppShell.tsx (+58/-0);apps/web/src/pages/DashboardPage.tsx (+85/-0) |
+| 5 | File-level changes are scoped/aligned | PASS | Changed files: 18. Top files: apps/web/README.md (+28/-0);apps/web/e2e/testing-pyramid.e2e.spec.ts (+4/-0);apps/web/package-lock.json (+46/-2);apps/web/package.json (+2/-1);apps/web/src/App.css (+129/-15);apps/web/src/App.tsx (+8/-89);apps/web/src/app/authStub.constants.ts (+3/-0);apps/web/src/app/authStub.context.ts (+19/-0);apps/web/src/app/authStub.tsx (+39/-0);apps/web/src/app/route-guard.unit.test.tsx (+42/-0);apps/web/src/components/shell/AppShell.tsx (+58/-0);apps/web/src/pages/DashboardPage.tsx (+85/-0) |
 | 6 | Linked issues are correct | PASS | No unexpected linked issues. |
 | 7 | Linked issues are complete | PASS | All expected issues are linked. |
 | 8 | Sourcery review findings resolved | PASS | All Sourcery threads resolved (1/1). |
