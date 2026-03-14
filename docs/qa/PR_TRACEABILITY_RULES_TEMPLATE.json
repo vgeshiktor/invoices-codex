@@ -1,52 +1,44 @@
 {
   "requirements": [
     {
-      "source": "docs/ARCHITECTURE.md",
-      "requirement": "CollectionJob entity is added to SaaS domain model",
+      "source": "docs/FRONTEND_GITHUB_ISSUES.md",
+      "requirement": "FE-201 provider settings UI supports connect/disconnect/re-auth actions",
       "scope": "diff",
       "patterns": [
-        "class CollectionJob\\(Base\\)",
-        "__tablename__ = \"saas_collection_jobs\""
+        "Provider settings",
+        "Connect",
+        "Disconnect",
+        "Re-auth"
       ],
       "on_missing": "FAIL"
     },
     {
-      "source": "docs/FRONTEND_WEEK4_EXECUTION_PLAN.md",
-      "requirement": "Collection jobs create endpoint is implemented",
+      "source": "docs/contracts/PROVIDER_WEEK3_CONTRACT.md",
+      "requirement": "Provider types include gmail and outlook",
       "scope": "diff",
       "patterns": [
-        "@app.post\\(\"/v1/collection-jobs\"",
-        "def create_collection_job\\("
+        "'gmail'",
+        "'outlook'"
       ],
       "on_missing": "FAIL"
     },
     {
-      "source": "docs/FRONTEND_WEEK4_EXECUTION_PLAN.md",
-      "requirement": "Collection jobs list/get endpoints are implemented",
+      "source": "docs/contracts/PROVIDER_WEEK3_CONTRACT.md",
+      "requirement": "Provider connection states include connected/disconnected/error",
       "scope": "diff",
       "patterns": [
-        "@app.get\\(\"/v1/collection-jobs\"\\)",
-        "@app.get\\(\"/v1/collection-jobs/\\{collection_job_id\\}\"\\)"
+        "'connected'",
+        "'disconnected'",
+        "'error'"
       ],
       "on_missing": "FAIL"
     },
     {
-      "source": "docs/FRONTEND_WEEK4_EXECUTION_PLAN.md",
-      "requirement": "Collection create endpoint supports idempotency",
+      "source": "docs/FRONTEND_GITHUB_ISSUES.md",
+      "requirement": "FE-201 includes a failure-path test for provider action handling",
       "scope": "diff",
       "patterns": [
-        "scope=\"collection_jobs.create\"",
-        "IdempotencyRecord\\("
-      ],
-      "on_missing": "FAIL"
-    },
-    {
-      "source": "docs/PRD_V1_SAAS.md",
-      "requirement": "Collection lifecycle requirement is documented",
-      "scope": "diff",
-      "patterns": [
-        "FR-9 Collection run lifecycle",
-        "Journey E: Collection Run Tracking"
+        "renders a recoverable action error when connect fails"
       ],
       "on_missing": "FAIL"
     }

@@ -8,5 +8,12 @@ test('renders app shell', async ({ page }) => {
   await page.getByRole('button', { name: 'Sign in (stub)' }).click();
 
   await expect(page.getByRole('heading', { name: 'Invoices Web' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Fetch dashboard summary' })).toBeVisible();
+  await page.getByRole('link', { name: 'Providers' }).click();
+
+  await expect(page.getByRole('heading', { name: 'Provider settings' })).toBeVisible();
+  await expect(page.getByTestId('provider-card-gmail')).toBeVisible();
+  await expect(page.getByTestId('provider-card-outlook')).toBeVisible();
+  await expect(
+    page.getByTestId('provider-card-gmail').getByRole('button', { name: 'Connect' }),
+  ).toBeVisible();
 });
