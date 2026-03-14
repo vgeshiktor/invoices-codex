@@ -58,7 +58,7 @@ describe('ReportDetailScreen', () => {
 
     expect(screen.getByText('Report detail')).toBeInTheDocument();
     expect(screen.getByText('Succeeded')).toBeInTheDocument();
-    expect(screen.getByText('json')).toBeInTheDocument();
+    expect(screen.getByText('JSON')).toBeInTheDocument();
     expect(screen.getByText('2,048 bytes')).toBeInTheDocument();
   });
 
