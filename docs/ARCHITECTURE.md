@@ -98,6 +98,20 @@ Out of scope:
 - Secrets: no plaintext keys in DB; store only key hashes and prefixes.
 - Auditing: upload, job submit, report create/download, key lifecycle actions.
 
+## 6.1 Provider OAuth Lifecycle (Week 3 Extension)
+
+- Provider integrations are tenant-scoped records (`saas_provider_configs`) with one row per `(tenant_id, provider_type)`.
+- OAuth lifecycle endpoints are tenant-scoped:
+  - `POST /v1/providers/{provider_id}/oauth/start`
+  - `GET /v1/providers/{provider_id}/oauth/callback`
+  - `POST /v1/providers/{provider_id}/oauth/refresh`
+  - `POST /v1/providers/{provider_id}/oauth/revoke`
+- OAuth provider client IDs/scopes are runtime-configured per provider type.
+- OAuth start enforces redirect URI host allowlists and HTTPS-by-default callback URLs.
+- Temporary OAuth callback state is persisted in internal provider config keys and consumed during callback.
+- OAuth token fields are stored only in encrypted-token columns and never returned via API responses.
+- OAuth state transitions emit audit events with request metadata for traceability.
+
 ## 7. NFR Baseline
 
 - Availability target: 99.5% monthly (MVP).

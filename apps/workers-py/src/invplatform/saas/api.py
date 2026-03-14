@@ -1,7 +1,7 @@
 import json
 import logging
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -37,6 +37,24 @@ class ApiAppConfig:
     auth_access_token_ttl_seconds: int = 900
     auth_refresh_token_ttl_seconds: int = 30 * 24 * 60 * 60
     auth_cookie_secure: bool = True
+    provider_oauth_client_ids: dict[str, str] = field(
+        default_factory=lambda: {
+            "gmail": "invoices-codex-local",
+            "outlook": "invoices-codex-local",
+        }
+    )
+    provider_oauth_scopes: dict[str, str] = field(
+        default_factory=lambda: {
+            "gmail": "openid email https://www.googleapis.com/auth/gmail.readonly",
+            "outlook": "offline_access User.Read Mail.Read",
+        }
+    )
+    provider_oauth_allowed_redirect_hosts: tuple[str, ...] = (
+        "app.example.test",
+        "localhost",
+        "127.0.0.1",
+    )
+    provider_oauth_allow_insecure_local_redirect: bool = True
 
 
 def _normalize_action(method: str, route_path: str) -> str:
@@ -98,6 +116,10 @@ def _build_service(config: ApiAppConfig) -> SaaSService:
         auth_access_token_secret=config.auth_access_token_secret,
         auth_access_token_ttl_seconds=config.auth_access_token_ttl_seconds,
         auth_refresh_token_ttl_seconds=config.auth_refresh_token_ttl_seconds,
+        provider_oauth_client_ids=dict(config.provider_oauth_client_ids),
+        provider_oauth_scopes=dict(config.provider_oauth_scopes),
+        provider_oauth_allowed_redirect_hosts=tuple(config.provider_oauth_allowed_redirect_hosts),
+        provider_oauth_allow_insecure_local_redirect=config.provider_oauth_allow_insecure_local_redirect,
     )
     return SaaSService(session_factory=session_factory, queue=queue, config=service_config)
 
@@ -161,6 +183,14 @@ def _provider_to_dict(row: ProviderConfig) -> dict[str, object]:
             row.tenant_id,
             exc_info=True,
         )
+        config = {}
+    if isinstance(config, dict):
+        config = {
+            key: value
+            for key, value in config.items()
+            if not (isinstance(key, str) and key.startswith("_oauth_"))
+        }
+    else:
         config = {}
 
     return {
@@ -258,6 +288,9 @@ def create_app(config: ApiAppConfig | None = None):
         last_error_code: str | None = None
         last_error_message: str | None = None
 
+    class ProviderOAuthStartRequest(BaseModel):
+        redirect_uri: str
+
     def get_service() -> SaaSService:
         return app.state.service  # type: ignore[no-any-return]
 
@@ -313,6 +346,11 @@ def create_app(config: ApiAppConfig | None = None):
             "PROVIDER_NOT_FOUND": 404,
             "PROVIDER_CONFLICT": 409,
             "PROVIDER_VALIDATION_ERROR": 400,
+            "PROVIDER_OAUTH_NOT_CONNECTED": 409,
+            "PROVIDER_OAUTH_STATE_INVALID": 400,
+            "PROVIDER_OAUTH_STATE_EXPIRED": 400,
+            "PROVIDER_OAUTH_CONFIG_ERROR": 503,
+            "PROVIDER_CONFIG_ERROR": 500,
         }
         return HTTPException(status_code=status_by_code.get(exc.code, 400), detail=exc.message)
 
@@ -637,6 +675,93 @@ def create_app(config: ApiAppConfig | None = None):
         except ProviderConfigError as exc:
             raise _provider_http_exception(exc) from exc
         return Response(status_code=204)
+
+    @app.post("/v1/providers/{provider_id}/oauth/start")
+    def start_provider_oauth(
+        provider_id: str,
+        payload: ProviderOAuthStartRequest,
+        request: Request,
+        tenant_id: str = Depends(get_tenant_id),
+        actor: str | None = Depends(get_actor),
+        service: SaaSService = Depends(get_service),
+    ) -> dict[str, object]:
+        try:
+            result = service.start_provider_oauth(
+                tenant_id=tenant_id,
+                provider_id=provider_id,
+                redirect_uri=payload.redirect_uri,
+                actor=actor,
+                request_id=getattr(request.state, "request_id", None),
+            )
+        except ProviderConfigError as exc:
+            raise _provider_http_exception(exc) from exc
+        return {
+            "provider": _provider_to_dict(result.provider),
+            "authorization_url": result.authorization_url,
+            "state": result.state,
+            "state_expires_at": _iso(result.state_expires_at),
+        }
+
+    @app.get("/v1/providers/{provider_id}/oauth/callback")
+    def complete_provider_oauth_callback(
+        provider_id: str,
+        request: Request,
+        state: str = Query(default=""),
+        code: str = Query(default=""),
+        tenant_id: str = Depends(get_tenant_id),
+        actor: str | None = Depends(get_actor),
+        service: SaaSService = Depends(get_service),
+    ) -> dict[str, object]:
+        try:
+            item = service.complete_provider_oauth_callback(
+                tenant_id=tenant_id,
+                provider_id=provider_id,
+                state=state,
+                code=code,
+                actor=actor,
+                request_id=getattr(request.state, "request_id", None),
+            )
+        except ProviderConfigError as exc:
+            raise _provider_http_exception(exc) from exc
+        return _provider_to_dict(item)
+
+    @app.post("/v1/providers/{provider_id}/oauth/refresh")
+    def refresh_provider_oauth(
+        provider_id: str,
+        request: Request,
+        tenant_id: str = Depends(get_tenant_id),
+        actor: str | None = Depends(get_actor),
+        service: SaaSService = Depends(get_service),
+    ) -> dict[str, object]:
+        try:
+            item = service.refresh_provider_oauth(
+                tenant_id=tenant_id,
+                provider_id=provider_id,
+                actor=actor,
+                request_id=getattr(request.state, "request_id", None),
+            )
+        except ProviderConfigError as exc:
+            raise _provider_http_exception(exc) from exc
+        return _provider_to_dict(item)
+
+    @app.post("/v1/providers/{provider_id}/oauth/revoke")
+    def revoke_provider_oauth(
+        provider_id: str,
+        request: Request,
+        tenant_id: str = Depends(get_tenant_id),
+        actor: str | None = Depends(get_actor),
+        service: SaaSService = Depends(get_service),
+    ) -> dict[str, object]:
+        try:
+            item = service.revoke_provider_oauth(
+                tenant_id=tenant_id,
+                provider_id=provider_id,
+                actor=actor,
+                request_id=getattr(request.state, "request_id", None),
+            )
+        except ProviderConfigError as exc:
+            raise _provider_http_exception(exc) from exc
+        return _provider_to_dict(item)
 
     @app.get("/dashboard", include_in_schema=False)
     def dashboard_page():

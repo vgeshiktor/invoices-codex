@@ -1,11 +1,11 @@
-# Provider Week 3 Contract (BE-101)
+# Provider Week 3 Contract (BE-101 + BE-102)
 
-Status: Draft frozen for BE-101 implementation
-Date: 2026-03-11
+Status: Draft frozen for Week 3 implementation
+Date: 2026-03-14
 
 Scope:
-- tenant-scoped provider configuration CRUD only.
-- OAuth start/callback/refresh/revoke flows are out of scope for BE-101 and covered by BE-102.
+- tenant-scoped provider configuration CRUD.
+- tenant-scoped OAuth lifecycle endpoints (`start`, `callback`, `refresh`, `revoke`) for `gmail` and `outlook`.
 
 ## Endpoints
 
@@ -87,24 +87,98 @@ Response:
 - `204` deleted
 - `404` provider not found in tenant
 
+### `POST /v1/providers/{provider_id}/oauth/start`
+
+Request body:
+
+```json
+{
+  "redirect_uri": "https://app.example.test/oauth/callback"
+}
+```
+
+Response `200`:
+
+```json
+{
+  "provider": {
+    "id": "uuid",
+    "tenant_id": "uuid",
+    "provider_type": "gmail",
+    "display_name": "Ops Gmail",
+    "connection_status": "disconnected",
+    "config": {"sync_window_days": 30},
+    "token_expires_at": null,
+    "last_successful_sync_at": null,
+    "last_error_code": null,
+    "last_error_message": null,
+    "created_at": "2026-03-14T10:00:00+00:00",
+    "updated_at": "2026-03-14T10:00:00+00:00"
+  },
+  "authorization_url": "https://accounts.google.com/o/oauth2/v2/auth?...",
+  "state": "opaque-random-state",
+  "state_expires_at": "2026-03-14T10:10:00+00:00"
+}
+```
+
+Response errors:
+- `400` invalid `redirect_uri`.
+- `400` redirect URI host not in configured allowlist.
+- `404` provider not found in tenant.
+
+### `GET /v1/providers/{provider_id}/oauth/callback`
+
+Query params:
+- `state` (required)
+- `code` (required)
+
+Response:
+- `200` updated provider object (`connection_status=connected`, tokens never exposed).
+- `400` invalid/missing callback parameters.
+- `400` invalid or expired OAuth `state`.
+- `404` provider not found in tenant.
+
+### `POST /v1/providers/{provider_id}/oauth/refresh`
+
+Response:
+- `200` updated provider object with rotated token metadata (`connection_status=connected`).
+- `404` provider not found in tenant.
+- `409` provider is not currently connected (no refresh token state).
+
+### `POST /v1/providers/{provider_id}/oauth/revoke`
+
+Response:
+- `200` updated provider object with disconnected state and cleared OAuth token fields.
+- `404` provider not found in tenant.
+
 ## Domain Rules
 
 - Allowed `provider_type`: `gmail`, `outlook`.
 - Allowed `connection_status`: `connected`, `disconnected`, `error`.
 - Per-tenant uniqueness: one row per `(tenant_id, provider_type)`.
 - `config` persists as JSON object (`config_json` at rest).
+- OAuth start stores temporary state metadata in provider config using internal `_oauth_*` keys.
+- OAuth callback consumes and clears stored state metadata.
+- OAuth redirect URIs must match configured allowlist hosts (and use HTTPS except explicitly permitted localhost development callbacks).
 
 ## Tenant Isolation and Security
 
 - Endpoints are tenant-scoped via `X-API-Key` tenant resolution.
 - CRUD operations always filter by `tenant_id`.
 - Tenant guard includes provider model to prevent unscoped cross-tenant reads.
-- Encrypted token columns exist in schema for later OAuth lifecycle work and are never exposed in API responses.
+- OAuth token material is stored only in encrypted-token columns and is never exposed in API responses.
+- Internal OAuth state keys (`_oauth_*`) are stripped from API `config` payloads.
 
 ## Audit Events
 
 - `provider.create`
 - `provider.update`
 - `provider.delete`
+- `provider.oauth.start`
+- `provider.oauth.callback.succeeded`
+- `provider.oauth.callback.failed`
+- `provider.oauth.refresh.succeeded`
+- `provider.oauth.refresh.failed`
+- `provider.oauth.revoke.succeeded`
 
 All include tenant ID and request actor (`X-Actor`) when provided.
