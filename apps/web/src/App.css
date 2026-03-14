@@ -303,6 +303,135 @@
   color: #991b1b;
 }
 
+.status-badge--queued {
+  background: #e0e7ff;
+  color: #3730a3;
+}
+
+.status-badge--running {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.status-badge--succeeded {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.status-badge--failed {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.report-builder {
+  display: grid;
+  gap: 0.9rem;
+  margin-top: 1rem;
+}
+
+.report-builder__fieldset {
+  border: 1px solid #dbe4ee;
+  border-radius: 10px;
+  margin: 0;
+  padding: 0.75rem;
+}
+
+.report-builder__fieldset legend {
+  color: #334155;
+  font-size: 0.92rem;
+  font-weight: 700;
+  padding: 0 0.25rem;
+}
+
+.report-builder__format-grid {
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.report-builder__checkbox {
+  align-items: center;
+  border: 1px solid #dbe4ee;
+  border-radius: 8px;
+  display: flex;
+  gap: 0.5rem;
+  min-height: 44px;
+  padding: 0.55rem 0.65rem;
+}
+
+.report-builder__field {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.report-builder__field span {
+  color: #334155;
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.report-builder__field textarea {
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9rem;
+  line-height: 1.4;
+  padding: 0.65rem 0.75rem;
+  resize: vertical;
+}
+
+.report-builder__actions {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.report-list {
+  margin-top: 1rem;
+}
+
+.report-list__header {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  justify-content: space-between;
+}
+
+.report-list__header h3 {
+  margin: 0;
+}
+
+.report-list__grid {
+  display: grid;
+  gap: 0.85rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 0.9rem;
+}
+
+.report-card {
+  border: 1px solid #dbe4ee;
+  border-radius: 10px;
+  padding: 0.9rem;
+}
+
+.report-card__header {
+  align-items: center;
+  display: flex;
+  gap: 0.6rem;
+  justify-content: space-between;
+}
+
+.report-card__header h4 {
+  font-size: 0.98rem;
+  margin: 0;
+}
+
+.report-card__meta {
+  color: #475569;
+  font-size: 0.85rem;
+  margin: 0.55rem 0 0;
+}
+
 .route-status {
   margin: 3rem auto;
   max-width: 560px;
@@ -315,6 +444,11 @@
 
 @media (max-width: 700px) {
   .provider-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .report-builder__format-grid,
+  .report-list__grid {
     grid-template-columns: 1fr;
   }
 }

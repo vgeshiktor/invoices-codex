@@ -3,6 +3,7 @@ import { AppShell } from '../components/shell/AppShell';
 import { DashboardPage } from '../pages/DashboardPage';
 import { CollectionWizardPage } from '../pages/CollectionWizardPage';
 import { ProviderSettingsScreen } from '../features/providers/components/ProviderSettingsScreen';
+import { ReportCreationScreen } from '../features/reports/components/ReportCreationScreen';
 import { LoginPage } from '../pages/LoginPage';
 import { PlaceholderPage } from '../pages/PlaceholderPage';
 import { RouteStatusPage } from '../pages/RouteStatusPage';
@@ -19,7 +20,7 @@ export function AppRoutes() {
           <Route element={<DashboardPage />} path="/dashboard" />
           <Route element={<ProviderSettingsScreen />} path="/providers" />
           <Route element={<CollectionWizardPage />} path="/collections" />
-          <Route element={<PlaceholderPage title="Reports" />} path="/reports" />
+          <Route element={<ReportCreationScreen />} path="/reports" />
           <Route element={<PlaceholderPage title="Settings" />} path="/settings" />
         </Route>
       </Route>

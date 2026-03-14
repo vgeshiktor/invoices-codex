@@ -1,43 +1,45 @@
 {
   "requirements": [
     {
-      "source": "docs/PRD_V1_SAAS.md",
-      "requirement": "Collection run start UX exists with current-month wizard entry point",
+      "source": "docs/FRONTEND_GITHUB_ISSUES.md",
+      "requirement": "FE-401 report creation flow is available in the reports route",
       "scope": "diff",
       "patterns": [
-        "Collect current month",
-        "Start collection run",
-        "month_scope"
+        "ReportCreationScreen",
+        "path=\"/reports\"",
+        "Create report"
       ],
       "on_missing": "FAIL"
     },
     {
-      "source": "docs/ARCHITECTURE.md",
-      "requirement": "Collection jobs create flow uses collection-jobs endpoint contract",
+      "source": "docs/FRONTEND_WEEK6_EXECUTION_PLAN.md",
+      "requirement": "FE-401 format selection supports report output formats",
       "scope": "diff",
       "patterns": [
-        "/v1/collection-jobs",
-        "providers",
-        "Idempotency-Key"
+        "REPORT_FORMATS = ['json', 'csv', 'summary_csv', 'pdf']",
+        "Output formats",
+        "Summary CSV (.csv)"
       ],
       "on_missing": "FAIL"
     },
     {
-      "source": "docs/PRD_V1_SAAS.md",
-      "requirement": "Initial run status is surfaced to the user",
+      "source": "docs/FRONTEND_WEEK6_EXECUTION_PLAN.md",
+      "requirement": "FE-401 includes loading, empty, and error states",
       "scope": "diff",
       "patterns": [
-        "'queued'",
-        "Run started"
+        "Loading reports...",
+        "No reports created yet.",
+        "Could not create report"
       ],
       "on_missing": "FAIL"
     },
     {
-      "source": "docs/PRD_V1_SAAS.md",
-      "requirement": "Collection wizard includes a failure-path test",
+      "source": "docs/FRONTEND_GITHUB_ISSUES.md",
+      "requirement": "FE-401 includes happy-path and failure-path integration tests",
       "scope": "diff",
       "patterns": [
-        "shows error state when submit request fails"
+        "submits report request with selected formats and parsed filters",
+        "shows API error details when report creation fails"
       ],
       "on_missing": "FAIL"
     }
