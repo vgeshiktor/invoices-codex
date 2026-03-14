@@ -259,9 +259,11 @@ export function ReportCreationScreen({
             {submitError.status ? `HTTP ${submitError.status}` : 'No HTTP response'}
             {submitError.requestId ? ` | request-id: ${submitError.requestId}` : ''}
           </p>
-          {includeErrorStack && submitError.cause && (
+          {includeErrorStack &&
+            submitError.cause !== null &&
+            submitError.cause !== undefined && (
             <pre>{safeJsonStringify(submitError.cause)}</pre>
-          )}
+            )}
         </section>
       )}
 
