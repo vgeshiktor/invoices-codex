@@ -46,6 +46,11 @@ class _PassthroughStorage:
             path.unlink()
 
 
+class _FailingQueue:
+    def enqueue(self, _task_name: str, _payload: dict[str, str]) -> str:
+        raise RuntimeError("queue boom")
+
+
 def _service(tmp_path: Path) -> SaaSService:
     engine = build_engine(f"sqlite:///{tmp_path / 'saas-worker.db'}")
     Base.metadata.create_all(bind=engine)
@@ -305,6 +310,92 @@ def test_run_collection_job_failed_for_unconnected_provider(tmp_path: Path) -> N
         assert json.loads(row.parse_job_ids_json) == []
         assert row.error_message is not None
         assert "PROVIDER_NOT_CONNECTED" in row.error_message
+
+
+def test_run_collection_job_returns_running_for_already_running_job(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    tenant, _key = service.bootstrap_tenant("Acme Ltd")
+    collection_job = service.create_collection_job(
+        tenant.id,
+        providers=["gmail"],
+        month_scope="2026-04",
+        idempotency_key="collection-running-status",
+    )
+
+    with service.session_factory() as session:
+        row = session.execute(
+            select(CollectionJob).where(CollectionJob.id == collection_job.id)
+        ).scalar_one()
+        row.status = "running"
+        session.commit()
+
+    status = run_collection_job(
+        session_factory=service.session_factory,
+        collection_job_id=collection_job.id,
+    )
+    assert status.value == "running"
+
+
+def test_run_collection_job_outer_exception_sets_structured_error_payload(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    tenant, _key = service.bootstrap_tenant("Acme Ltd")
+
+    provider = service.create_provider_config(
+        tenant.id,
+        provider_type="gmail",
+        connection_status="connected",
+    )
+    start = service.start_provider_oauth(
+        tenant.id,
+        provider.id,
+        redirect_uri="https://app.example.test/oauth/callback",
+    )
+    service.complete_provider_oauth_callback(
+        tenant.id,
+        start.provider.id,
+        state=start.state,
+        code="code-1",
+    )
+
+    collection_job = service.create_collection_job(
+        tenant.id,
+        providers=["gmail"],
+        month_scope="2026-04",
+        idempotency_key="collection-queue-failure",
+    )
+    storage = LocalStorageBackend(tmp_path / "collection-storage-fail")
+
+    def provider_executor(
+        _provider, _month_scope: str, _collection_job_id: str
+    ) -> list[CollectedProviderFile]:
+        return [
+            CollectedProviderFile(filename="invoice-001.pdf", content=b"%PDF-1.4\n")
+        ]
+
+    status = run_collection_job(
+        session_factory=service.session_factory,
+        collection_job_id=collection_job.id,
+        storage_backend=storage,
+        queue=_FailingQueue(),
+        provider_executor=provider_executor,
+    )
+    assert status.value == "failed"
+
+    with service.session_factory() as session:
+        row = session.execute(
+            select(CollectionJob).where(CollectionJob.id == collection_job.id)
+        ).scalar_one()
+        assert row.status == "failed"
+        assert row.error_message is not None
+        payload = json.loads(row.error_message)
+        failures = payload["provider_failures"]
+        assert isinstance(failures, list)
+        assert failures[0]["code"] == "COLLECTION_JOB_EXECUTION_ERROR"
+        assert "queue boom" in failures[0]["message"]
 
 
 def test_run_report_job_generates_artifacts(tmp_path: Path) -> None:

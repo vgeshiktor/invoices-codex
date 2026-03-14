@@ -141,4 +141,4 @@ Collection orchestration worker behavior:
 5. Finalizes job status:
    - `succeeded` when all providers complete without failures.
    - `failed` when any provider fails or no files are downloaded.
-6. Failure details are serialized in `error_message` as UI-safe JSON payload.
+6. Failure details are serialized in `error_message` as a UI-safe JSON payload.

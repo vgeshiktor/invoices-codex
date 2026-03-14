@@ -12,7 +12,7 @@ import uuid
 from typing import cast
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from invplatform.usecases import report_pipeline
@@ -249,6 +249,10 @@ def _default_provider_executor(
     return [CollectedProviderFile(filename=filename, content=_pdf_report_bytes())]
 
 
+def _collection_failures_payload(failures: list[dict[str, str]]) -> str:
+    return json.dumps({"provider_failures": failures}, sort_keys=True)
+
+
 def run_collection_job(
     session_factory: sessionmaker[Session],
     collection_job_id: str,
@@ -262,23 +266,32 @@ def run_collection_job(
     queue = queue or build_queue(os.environ.get("SAAS_REDIS_URL"))
     execute_provider = provider_executor or _default_provider_executor
 
+    started_at = _utcnow()
     with session_factory() as session:
         session.info["disable_tenant_guard"] = True
+        transitioned = session.execute(
+            update(CollectionJob)
+            .where(
+                CollectionJob.id == collection_job_id,
+                CollectionJob.status == CollectionJobStatus.QUEUED.value,
+            )
+            .values(
+                status=CollectionJobStatus.RUNNING.value,
+                started_at=started_at,
+                updated_at=started_at,
+                error_message=None,
+            )
+        ).rowcount
+        if transitioned != 1:
+            existing = session.execute(
+                select(CollectionJob).where(CollectionJob.id == collection_job_id)
+            ).scalar_one_or_none()
+            if existing is None:
+                raise ValueError(f"collection job not found: {collection_job_id}")
+            return CollectionJobStatus(existing.status)
         job = session.execute(
             select(CollectionJob).where(CollectionJob.id == collection_job_id)
-        ).scalar_one_or_none()
-        if job is None:
-            raise ValueError(f"collection job not found: {collection_job_id}")
-        if job.status in {
-            CollectionJobStatus.SUCCEEDED.value,
-            CollectionJobStatus.FAILED.value,
-            CollectionJobStatus.RUNNING.value,
-        }:
-            return CollectionJobStatus(job.status)
-        job.status = CollectionJobStatus.RUNNING.value
-        job.started_at = _utcnow()
-        job.updated_at = _utcnow()
-        job.error_message = None
+        ).scalar_one()
         session.add(
             AuditEvent(
                 tenant_id=job.tenant_id,
@@ -446,7 +459,7 @@ def run_collection_job(
             job.error_message = (
                 None
                 if status == CollectionJobStatus.SUCCEEDED
-                else json.dumps({"provider_failures": failures}, sort_keys=True)
+                else _collection_failures_payload(failures)
             )
             job.finished_at = _utcnow()
             job.updated_at = _utcnow()
@@ -475,8 +488,15 @@ def run_collection_job(
             ).scalar_one_or_none()
             if job is None:
                 raise ValueError(f"collection job not found: {collection_job_id}") from exc
+            failures = [
+                {
+                    "provider": "all",
+                    "code": "COLLECTION_JOB_EXECUTION_ERROR",
+                    "message": str(exc),
+                }
+            ]
             job.status = CollectionJobStatus.FAILED.value
-            job.error_message = str(exc)
+            job.error_message = _collection_failures_payload(failures)
             job.finished_at = _utcnow()
             job.updated_at = _utcnow()
             session.add(
@@ -484,7 +504,11 @@ def run_collection_job(
                     tenant_id=job.tenant_id,
                     event_type="collection_job.run.failed",
                     payload_json=json.dumps(
-                        {"collection_job_id": job.id, "error_message": str(exc)}
+                        {
+                            "collection_job_id": job.id,
+                            "failure_count": len(failures),
+                            "provider_failures": failures,
+                        }
                     ),
                 )
             )
