@@ -1,7 +1,9 @@
 import { apiClient, normalizeApiError, type ApiError } from '../../../shared/api/client';
 import {
   createReportV1ReportsPost,
+  getReportV1ReportsReportIdGet,
   listReportsV1ReportsGet,
+  retryReportV1ReportsReportIdRetryPost,
 } from '../../../shared/api/generated';
 import {
   REPORT_FORMATS,
@@ -18,7 +20,9 @@ type ReportResult<T> =
 
 export interface ReportCreationAdapter {
   createReport: (input: CreateReportInput) => Promise<ReportResult<ReportItem>>;
+  getReport: (reportId: string) => Promise<ReportResult<ReportItem>>;
   listReports: () => Promise<ReportResult<ReportItem[]>>;
+  retryReport: (reportId: string) => Promise<ReportResult<ReportItem>>;
 }
 
 const REPORT_STATUS_SET = new Set<ReportStatus>(['queued', 'running', 'succeeded', 'failed']);
@@ -161,6 +165,44 @@ export const reportCreationAdapter: ReportCreationAdapter = {
     }
   },
 
+  getReport: async (reportId) => {
+    try {
+      const result = await getReportV1ReportsReportIdGet({
+        client: apiClient,
+        path: {
+          report_id: reportId,
+        },
+      });
+
+      if (result.error !== undefined) {
+        return {
+          ok: false,
+          error: await normalizeApiError(result.error, result.response),
+        };
+      }
+
+      const report = parseReport(result.data);
+      if (report === null) {
+        return {
+          ok: false,
+          error: {
+            message: 'Malformed report payload from API',
+          },
+        };
+      }
+
+      return {
+        ok: true,
+        data: report,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        error: await normalizeApiError(error),
+      };
+    }
+  },
+
   listReports: async () => {
     try {
       const result = await listReportsV1ReportsGet({
@@ -177,6 +219,44 @@ export const reportCreationAdapter: ReportCreationAdapter = {
       return {
         ok: true,
         data: parseReportsList(result.data),
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        error: await normalizeApiError(error),
+      };
+    }
+  },
+
+  retryReport: async (reportId) => {
+    try {
+      const result = await retryReportV1ReportsReportIdRetryPost({
+        client: apiClient,
+        path: {
+          report_id: reportId,
+        },
+      });
+
+      if (result.error !== undefined) {
+        return {
+          ok: false,
+          error: await normalizeApiError(result.error, result.response),
+        };
+      }
+
+      const report = parseReport(result.data);
+      if (report === null) {
+        return {
+          ok: false,
+          error: {
+            message: 'Malformed report payload from API',
+          },
+        };
+      }
+
+      return {
+        ok: true,
+        data: report,
       };
     } catch (error) {
       return {

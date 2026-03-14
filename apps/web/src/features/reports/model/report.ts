@@ -4,6 +4,9 @@ export type ReportFormat = (typeof REPORT_FORMATS)[number];
 
 export type ReportStatus = 'queued' | 'running' | 'succeeded' | 'failed';
 
+export const isTerminalReportStatus = (status: ReportStatus): boolean =>
+  status === 'succeeded' || status === 'failed';
+
 export interface ReportArtifact {
   id: string;
   format: string;
