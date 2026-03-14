@@ -1,5 +1,5 @@
-import { NavLink, Outlet } from 'react-router-dom';
-import { useAuthStub } from '../../app/authStub.context';
+import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { useAuthSession } from '../../app/authSession.context';
 import { frontendEnv } from '../../shared/config/env';
 
 const navItems = [
@@ -11,17 +11,25 @@ const navItems = [
 ];
 
 export function AppShell() {
-  const { signOut } = useAuthStub();
+  const navigate = useNavigate();
+  const { isWorking, session, signOut } = useAuthSession();
+
+  const handleSignOut = async () => {
+    await signOut();
+    navigate('/login', { replace: true });
+  };
 
   return (
     <div className="shell">
       <header className="shell__header">
         <div>
           <h1 className="shell__title">Invoices Web</h1>
-          <p className="shell__subtitle">App shell + protected route skeleton (FE-003)</p>
+          <p className="shell__subtitle">Authenticated app shell + protected routes (FE-101)</p>
         </div>
-        <button className="shell__button" onClick={signOut} type="button">
-          Sign out
+        <button className="shell__button" disabled={isWorking} onClick={() => {
+          void handleSignOut();
+        }} type="button">
+          {isWorking ? 'Signing out...' : 'Sign out'}
         </button>
       </header>
 
@@ -31,6 +39,12 @@ export function AppShell() {
         </span>
         <span>
           <strong>Runtime:</strong> {frontendEnv.appEnv}
+        </span>
+        <span>
+          <strong>User:</strong> {session?.user.email ?? 'unknown'}
+        </span>
+        <span>
+          <strong>Tenant:</strong> {session?.tenant.slug ?? 'unknown'}
         </span>
       </div>
 
