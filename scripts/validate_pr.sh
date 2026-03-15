@@ -14,7 +14,7 @@ Usage:
     [--strict]
 
 Description:
-  Validates a PR against the 14 governance gates from
+  Validates a PR against the 16 governance gates from
   docs/qa/PR_VALIDATION_REQUIREMENTS_TEMPLATE.md and generates
   a Markdown validation report.
 
@@ -91,6 +91,33 @@ has_kw_ref_in_text_lc() {
     fi
   done
   return 1
+}
+
+extract_markdown_h2_section() {
+  local body="$1"
+  local heading_lc
+  heading_lc="$(to_lc "$(trim "$2")")"
+  awk -v heading="$heading_lc" '
+    BEGIN { in_section=0 }
+    {
+      line=$0
+      lower=tolower(line)
+      if (lower ~ /^##[[:space:]]+/) {
+        name=lower
+        sub(/^##[[:space:]]+/, "", name)
+        gsub(/^[[:space:]]+/, "", name)
+        gsub(/[[:space:]]+$/, "", name)
+        if (in_section == 1 && index(name, heading) == 0) {
+          exit
+        }
+        in_section = (index(name, heading) > 0)
+        next
+      }
+      if (in_section == 1) {
+        print line
+      }
+    }
+  ' <<<"$body"
 }
 
 set_gate() {
@@ -217,6 +244,8 @@ declare -a GATE_NAMES=(
   "Cross-repo issues use full form when needed"
   "All checks are green"
   "No conflicts with base branch"
+  "Backend architecture review completed for backend-impacting changes"
+  "Frontend architecture review completed for frontend-impacting changes"
 )
 
 # Gate 1: title format
@@ -450,6 +479,62 @@ else
   set_gate 14 "FAIL" "mergeable=$MERGEABLE, mergeStateStatus=$MERGE_STATE"
 fi
 
+# Gate 15/16: architecture review completion by impacted domain
+backend_change_count=0
+frontend_change_count=0
+while IFS= read -r path; do
+  [[ -z "$path" ]] && continue
+  if [[ "$path" == apps/web/* || "$path" == docs/frontend/* ]]; then
+    frontend_change_count=$((frontend_change_count + 1))
+  fi
+  if [[ "$path" == apps/api-go/* || "$path" == apps/workers-py/* || "$path" == invoices/* || "$path" == integrations/* || "$path" == storage/* || "$path" == tests/* ]]; then
+    backend_change_count=$((backend_change_count + 1))
+  fi
+done <<<"$FILES_LIST"
+
+BACKEND_ARCH_SECTION_LC="$(to_lc "$(extract_markdown_h2_section "$BODY" "Backend Architecture Review")")"
+FRONTEND_ARCH_SECTION_LC="$(to_lc "$(extract_markdown_h2_section "$BODY" "Frontend Architecture Review")")"
+
+if [[ "$backend_change_count" -eq 0 ]]; then
+  set_gate 15 "N/A" "No backend-impacting file changes detected."
+else
+  backend_missing=()
+  if [[ -z "$BACKEND_ARCH_SECTION_LC" ]]; then
+    backend_missing+=("section")
+  fi
+  if ! grep -Eiq 'status:[[:space:]]*approved' <<<"$BACKEND_ARCH_SECTION_LC"; then
+    backend_missing+=("status: Approved")
+  fi
+  if ! grep -Eiq '(reviewed by|backend architect):[[:space:]]*@?[[:alnum:]_.-]+' <<<"$BACKEND_ARCH_SECTION_LC"; then
+    backend_missing+=("reviewed by")
+  fi
+  if [[ ${#backend_missing[@]} -eq 0 ]]; then
+    set_gate 15 "PASS" "Backend impact detected ($backend_change_count files); architecture review marked Approved with reviewer."
+  else
+    set_gate 15 "FAIL" "Backend impact detected ($backend_change_count files); missing $(IFS=', '; echo "${backend_missing[*]}") in Backend Architecture Review."
+  fi
+fi
+
+if [[ "$frontend_change_count" -eq 0 ]]; then
+  set_gate 16 "N/A" "No frontend-impacting file changes detected."
+else
+  frontend_missing=()
+  if [[ -z "$FRONTEND_ARCH_SECTION_LC" ]]; then
+    frontend_missing+=("section")
+  fi
+  if ! grep -Eiq 'status:[[:space:]]*approved' <<<"$FRONTEND_ARCH_SECTION_LC"; then
+    frontend_missing+=("status: Approved")
+  fi
+  if ! grep -Eiq '(reviewed by|frontend architect):[[:space:]]*@?[[:alnum:]_.-]+' <<<"$FRONTEND_ARCH_SECTION_LC"; then
+    frontend_missing+=("reviewed by")
+  fi
+  if [[ ${#frontend_missing[@]} -eq 0 ]]; then
+    set_gate 16 "PASS" "Frontend impact detected ($frontend_change_count files); architecture review marked Approved with reviewer."
+  else
+    set_gate 16 "FAIL" "Frontend impact detected ($frontend_change_count files); missing $(IFS=', '; echo "${frontend_missing[*]}") in Frontend Architecture Review."
+  fi
+fi
+
 # PR body required sections report
 declare -a REQUIRED_SECTIONS=(
   "Problem Statement"
@@ -457,6 +542,8 @@ declare -a REQUIRED_SECTIONS=(
   "Summary"
   "Design Notes"
   "Reviewer Guide"
+  "Backend Architecture Review"
+  "Frontend Architecture Review"
   "Testing"
   "Rollout / Risk Notes"
 )
@@ -571,7 +658,7 @@ fi
 governance_pass=0
 governance_fail=0
 governance_na=0
-for i in $(seq 1 14); do
+for i in $(seq 1 16); do
   case "${GATE_STATUS[$i]}" in
     PASS) governance_pass=$((governance_pass + 1)) ;;
     FAIL) governance_fail=$((governance_fail + 1)) ;;
@@ -626,11 +713,11 @@ mkdir -p "$(dirname "$OUTPUT")"
     echo "- Traceability rules: (not provided)"
   fi
   echo
-  echo "## A) PR Governance Checklist (14 Gates)"
+  echo "## A) PR Governance Checklist (16 Gates)"
   echo
   echo "| # | Validation Item | Status | Evidence |"
   echo "|---|---|---|---|"
-  for i in $(seq 1 14); do
+  for i in $(seq 1 16); do
     printf '| %s | %s | %s | %s |\n' \
       "$i" \
       "$(md_escape "${GATE_NAMES[$i]}")" \
@@ -692,7 +779,7 @@ mkdir -p "$(dirname "$OUTPUT")"
   echo "## G) Final Verdict"
   echo
   echo "- Overall: $overall"
-  echo "- Governance gates: $governance_pass passed, $governance_fail failed, $governance_na n/a (out of 14)"
+  echo "- Governance gates: $governance_pass passed, $governance_fail failed, $governance_na n/a (out of 16)"
   echo "- Content completeness: $CONTENT_STATUS"
   echo "- Design traceability fails: $trace_fail"
   echo "- Design traceability deferred/partial: $trace_deferred_or_partial"

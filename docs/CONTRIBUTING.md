@@ -11,6 +11,8 @@ Keep delivery fast while protecting parser correctness and tenant isolation.
 - Include:
   - problem statement
   - design notes
+  - backend architecture review
+  - frontend architecture review
   - tests added/updated
   - rollout/risk notes
 
@@ -26,6 +28,7 @@ Keep delivery fast while protecting parser correctness and tenant isolation.
 
 - If a change affects architecture, security model, tenancy, queueing, or storage, add/update an ADR under `docs/ADR/`.
 - Reference ADR IDs in PR descriptions when relevant.
+- Follow `docs/ARCHITECTURE_REVIEW_POLICY.md` for architect review responsibilities and merge gates.
 
 ## SaaS Safety Rules
 

@@ -37,4 +37,5 @@ This onboarding guide is for contributors working on the SaaS conversion of the 
 - Reuse usecase modules; do not duplicate parser heuristics in API handlers.
 - Keep CLI outputs and behavior unchanged unless tests prove a bug fix.
 - Every architecture-affecting decision must have an ADR update/addition.
+- Follow `docs/ARCHITECTURE_REVIEW_POLICY.md` and fill architecture review sections in `.github/PULL_REQUEST_TEMPLATE.md`.
 - Add tests for new service boundaries before integration wiring.

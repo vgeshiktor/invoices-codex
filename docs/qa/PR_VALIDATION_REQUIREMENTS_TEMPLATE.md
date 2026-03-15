@@ -24,7 +24,7 @@ Use this template to validate any PR against:
 
 ---
 
-## B) PR Governance Checklist (14 Gates)
+## B) PR Governance Checklist (16 Gates)
 
 Mark each item `PASS` / `FAIL` / `N/A` and add evidence.
 
@@ -44,6 +44,8 @@ Mark each item `PASS` / `FAIL` / `N/A` and add evidence.
 | 12 | Cross-repo issues use full form (`Closes owner/repo#123`) | `<PASS/FAIL/N/A>` | `<body/commit evidence>` |
 | 13 | All checks are green | `<PASS/FAIL/N/A>` | `<check run names + states>` |
 | 14 | No conflicts with base branch (mergeable cleanly) | `<PASS/FAIL/N/A>` | `<mergeable + merge state>` |
+| 15 | Backend architecture review completed for backend-impacting changes | `<PASS/FAIL/N/A>` | `<section + status + reviewer>` |
+| 16 | Frontend architecture review completed for frontend-impacting changes | `<PASS/FAIL/N/A>` | `<section + status + reviewer>` |
 
 ---
 
@@ -56,6 +58,8 @@ Required sections:
 - Summary
 - Design Notes
 - Reviewer Guide
+- Backend Architecture Review
+- Frontend Architecture Review
 - Testing
 - Rollout / Risk Notes
 
@@ -148,7 +152,7 @@ Overall: `<PASS / PASS WITH DEFERRED ITEMS / FAIL>`
 
 Summary:
 
-- Governance gates: `<x>/14 passed`
+- Governance gates: `<x>/16 passed`
 - Content completeness: `<PASS/FAIL>`
 - Design traceability: `<PASS/PARTIAL/FAIL>`
 - Blocking gaps: `<none or list>`
