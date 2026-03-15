@@ -345,11 +345,27 @@ export SAAS_CONTROL_PLANE_API_KEY=dev-control-plane-key
 # 2) start redis + saas api + rq worker
 make run-saas-demo-up
 
-# 3) create tenant and first API key
-curl -s -X POST http://127.0.0.1:8081/v1/control-plane/tenants \
+# 3) create tenant and first API key (safe bootstrap)
+BASE_URL=http://127.0.0.1:8081
+until curl -fsS "$BASE_URL/healthz" >/dev/null; do sleep 1; done
+
+RESP=$(curl -sS -X POST "$BASE_URL/v1/control-plane/tenants" \
   -H "X-Control-Plane-Key: $SAAS_CONTROL_PLANE_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"name":"Demo Tenant"}'
+  -d '{"name":"Demo Tenant"}' \
+  -w $'\n%{http_code}')
+
+HTTP_CODE="${RESP##*$'\n'}"
+BOOTSTRAP_JSON="${RESP%$'\n'*}"
+
+if [ "$HTTP_CODE" != "201" ]; then
+  echo "bootstrap failed (HTTP $HTTP_CODE)"
+  echo "$BOOTSTRAP_JSON"
+else
+  echo "$BOOTSTRAP_JSON"
+  TENANT_API_KEY=$(jq -r '.api_key.plain_text' <<<"$BOOTSTRAP_JSON")
+  echo "TENANT_API_KEY=$TENANT_API_KEY"
+fi
 
 # 4) open docs and dashboard for demo stack
 # http://127.0.0.1:8081/swagger
