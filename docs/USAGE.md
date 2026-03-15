@@ -341,6 +341,7 @@ Control plane + runtime alignment demo (Docker Compose with Redis/RQ):
 ```bash
 # 1) choose control-plane key in your shell
 export SAAS_CONTROL_PLANE_API_KEY=dev-control-plane-key
+export SAAS_AUTH_ACCESS_TOKEN_SECRET=dev-auth-access-token-secret
 
 # 2) start redis + saas api + rq worker
 make run-saas-demo-up

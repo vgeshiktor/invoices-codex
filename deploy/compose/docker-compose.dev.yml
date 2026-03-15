@@ -24,6 +24,7 @@ services:
     environment:
       PYTHONPATH: /app/src
       SAAS_CONTROL_PLANE_API_KEY: ${SAAS_CONTROL_PLANE_API_KEY:-dev-control-plane-key}
+      SAAS_AUTH_ACCESS_TOKEN_SECRET: ${SAAS_AUTH_ACCESS_TOKEN_SECRET:-dev-auth-access-token-secret}
     command:
       - python
       - -m
@@ -40,6 +41,7 @@ services:
       - redis://redis:6379/0
       - --control-plane-api-key
       - ${SAAS_CONTROL_PLANE_API_KEY:-dev-control-plane-key}
+      - --allow-insecure-auth-cookie
     ports: ["8081:8081"]
     volumes:
       - ../../storage:/data/files
