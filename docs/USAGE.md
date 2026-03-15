@@ -344,11 +344,11 @@ export SAAS_CONTROL_PLANE_API_KEY=dev-control-plane-key
 export SAAS_AUTH_ACCESS_TOKEN_SECRET=dev-auth-access-token-secret
 
 # 2) start redis + saas api + rq worker
+#    (this command now waits for API readiness and fails with logs if not ready)
 make run-saas-demo-up
 
 # 3) create tenant and first API key (safe bootstrap)
 BASE_URL=http://127.0.0.1:8081
-until curl -fsS "$BASE_URL/healthz" >/dev/null; do sleep 1; done
 
 RESP=$(curl -sS -X POST "$BASE_URL/v1/control-plane/tenants" \
   -H "X-Control-Plane-Key: $SAAS_CONTROL_PLANE_API_KEY" \

@@ -27,7 +27,7 @@ Use this narrative in the first minute:
 ```bash
 export SAAS_CONTROL_PLANE_API_KEY=dev-control-plane-key
 export SAAS_AUTH_ACCESS_TOKEN_SECRET=dev-auth-access-token-secret
-docker compose --env-file .env -f deploy/compose/docker-compose.dev.yml up -d --build saas-api saas-rq-worker
+make run-saas-demo-up
 docker compose --env-file .env -f deploy/compose/docker-compose.dev.yml ps
 ```
 

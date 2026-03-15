@@ -144,14 +144,25 @@ run-monthly: ## Download current-month invoices (Gmail+Outlook) and consolidate 
 run-n8n: ## Start n8n (dev compose only)
 	docker compose --env-file .env -f deploy/compose/docker-compose.dev.yml up -d --build n8n
 
-run-saas-demo-up: ## Start SaaS demo stack (saas-api + rq worker + redis)
-	docker compose --env-file .env -f deploy/compose/docker-compose.dev.yml up -d --build redis saas-api saas-rq-worker
+run-saas-demo-up: ## Start SaaS demo stack and wait for API readiness
+	docker compose --env-file .env -f deploy/compose/docker-compose.dev.yml up -d --build saas-api saas-rq-worker
+	@echo "Waiting for SaaS API readiness on http://127.0.0.1:8081/healthz ..."
+	@for i in $$(seq 1 90); do \
+		if curl -fsS http://127.0.0.1:8081/healthz >/dev/null; then \
+			echo "SaaS API is ready."; \
+			exit 0; \
+		fi; \
+		sleep 1; \
+	done; \
+	echo "SaaS API failed to become ready in time. Recent saas-api logs:"; \
+	docker compose --env-file .env -f deploy/compose/docker-compose.dev.yml logs --tail=120 saas-api; \
+	exit 1
 
 run-saas-demo-down: ## Stop SaaS demo stack services
-	docker compose --env-file .env -f deploy/compose/docker-compose.dev.yml stop saas-api saas-rq-worker redis
+	docker compose --env-file .env -f deploy/compose/docker-compose.dev.yml stop saas-api saas-rq-worker
 
 run-saas-demo-logs: ## Tail SaaS demo stack logs
-	docker compose --env-file .env -f deploy/compose/docker-compose.dev.yml logs -f saas-api saas-rq-worker redis
+	docker compose --env-file .env -f deploy/compose/docker-compose.dev.yml logs -f saas-api saas-rq-worker
 
 quarantine: ## Move non-invoice PDFs into quarantine/
 	PYTHONPATH=$(PYTHONPATH_EXTRA):$$PYTHONPATH $(PYTHON) -m invplatform.cli.quarantine_invoices
