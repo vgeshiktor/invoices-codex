@@ -45,6 +45,8 @@ Execute this workflow end-to-end for the next unblocked issue assigned to you.
   - Summary
   - Design Notes
   - Reviewer Guide
+  - Backend Architecture Review (`Status: Approved|N/A`, `Reviewed By: ...`)
+  - Frontend Architecture Review (`Status: Approved|N/A`, `Reviewed By: ...`)
   - Testing
   - Rollout / Risk Notes
 
@@ -62,6 +64,7 @@ Execute this workflow end-to-end for the next unblocked issue assigned to you.
 7) Resolve issues after validation
 - If validation is FAIL:
   - fix all failed gates
+  - rebase on latest `origin/main` and fully resolve merge conflicts
   - resolve all open Sourcery/Codex review threads
   - rerun validation
 - Repeat until validation report is PASS.

@@ -1,45 +1,31 @@
 {
   "requirements": [
     {
-      "source": "docs/FRONTEND_GITHUB_ISSUES.md",
-      "requirement": "FE-401 report creation flow is available in the reports route",
+      "source": "docs/PRD_V1_SAAS.md",
+      "requirement": "Core user journey requirement is implemented in this PR",
       "scope": "diff",
       "patterns": [
-        "ReportCreationScreen",
-        "path=\"/reports\"",
-        "Create report"
+        "<replace-with-key-code-symbol>",
+        "<replace-with-route-or-endpoint-pattern>"
       ],
       "on_missing": "FAIL"
     },
     {
-      "source": "docs/FRONTEND_WEEK6_EXECUTION_PLAN.md",
-      "requirement": "FE-401 format selection supports report output formats",
+      "source": "docs/ARCHITECTURE.md",
+      "requirement": "Architecture boundary/contract updates are reflected",
       "scope": "diff",
       "patterns": [
-        "REPORT_FORMATS = ['json', 'csv', 'summary_csv', 'pdf']",
-        "Output formats",
-        "Summary CSV (.csv)"
+        "<replace-with-contract-or-boundary-pattern>"
       ],
       "on_missing": "FAIL"
     },
     {
-      "source": "docs/FRONTEND_WEEK6_EXECUTION_PLAN.md",
-      "requirement": "FE-401 includes loading, empty, and error states",
+      "source": "docs/CONTRIBUTING.md",
+      "requirement": "Tests include happy path and at least one failure path",
       "scope": "diff",
       "patterns": [
-        "Loading reports...",
-        "No reports created yet.",
-        "Could not create report"
-      ],
-      "on_missing": "FAIL"
-    },
-    {
-      "source": "docs/FRONTEND_GITHUB_ISSUES.md",
-      "requirement": "FE-401 includes happy-path and failure-path integration tests",
-      "scope": "diff",
-      "patterns": [
-        "submits report request with selected formats and parsed filters",
-        "shows API error details when report creation fails"
+        "integration\\.test",
+        "error|fail|invalid|unauthorized"
       ],
       "on_missing": "FAIL"
     }
