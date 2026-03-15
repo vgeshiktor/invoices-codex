@@ -1,0 +1,36 @@
+if ! curl -fsS "$BASE_URL/healthz" >/dev/null; then
+  echo "SaaS API is not reachable at $BASE_URL"
+  echo "Start stack: docker compose --env-file .env -f deploy/compose/docker-compose.dev.yml up -d --build redis saas-api saas-rq-worker"
+
+fi
+
+RESP=$(curl -sS -X POST "$BASE_URL/v1/control-plane/tenants" \
+  -H "X-Control-Plane-Key: $SAAS_CONTROL_PLANE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "X-Actor: demo-admin" \
+  -d "{\"name\":\"$DEMO_TENANT_NAME\"}" \
+  -w $'\n%{http_code}') || {
+    echo "Tenant bootstrap request failed (network/connection error)."
+  }
+
+HTTP_CODE="${RESP##*$'\n'}"
+BOOTSTRAP_JSON="${RESP%$'\n'*}"
+
+if [[ "$HTTP_CODE" != "201" ]]; then
+  echo "Tenant bootstrap failed with HTTP $HTTP_CODE"
+  echo "$BOOTSTRAP_JSON"
+
+fi
+
+echo "$BOOTSTRAP_JSON"
+
+if ! jq -e '.tenant.id and .api_key.plain_text' >/dev/null <<<"$BOOTSTRAP_JSON"; then
+  echo "Unexpected tenant bootstrap response payload."
+
+fi
+
+TENANT_ID=$(jq -r '.tenant.id' <<<"$BOOTSTRAP_JSON")
+TENANT_API_KEY=$(jq -r '.api_key.plain_text' <<<"$BOOTSTRAP_JSON")
+
+echo "TENANT_ID=$TENANT_ID"
+echo "TENANT_API_KEY=$TENANT_API_KEY"
