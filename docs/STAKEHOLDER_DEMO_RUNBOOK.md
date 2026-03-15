@@ -26,7 +26,7 @@ Use this narrative in the first minute:
 
 ```bash
 export SAAS_CONTROL_PLANE_API_KEY=dev-control-plane-key
-docker compose --env-file .env -f deploy/compose/docker-compose.dev.yml up -d --build redis saas-api saas-rq-worker
+docker compose --env-file .env -f deploy/compose/docker-compose.dev.yml up -d --build saas-api saas-rq-worker
 docker compose --env-file .env -f deploy/compose/docker-compose.dev.yml ps
 ```
 
@@ -50,7 +50,7 @@ export FILE_PATH="/absolute/path/to/invoice.pdf"
 ```bash
 if ! curl -fsS "$BASE_URL/healthz" >/dev/null; then
   echo "SaaS API is not reachable at $BASE_URL"
-  echo "Start stack: docker compose --env-file .env -f deploy/compose/docker-compose.dev.yml up -d --build redis saas-api saas-rq-worker"
+  echo "Start stack: docker compose --env-file .env -f deploy/compose/docker-compose.dev.yml up -d --build saas-api saas-rq-worker"
   exit 1
 fi
 
@@ -368,12 +368,12 @@ curl -fsS "$BASE_URL/metrics" | head -n 30
 ## 16) Fast Troubleshooting
 
 ```bash
-docker compose --env-file .env -f deploy/compose/docker-compose.dev.yml logs --tail=120 saas-api saas-rq-worker redis
-docker compose --env-file .env -f deploy/compose/docker-compose.dev.yml up -d --build saas-api saas-rq-worker redis
+docker compose --env-file .env -f deploy/compose/docker-compose.dev.yml logs --tail=120 saas-api saas-rq-worker
+docker compose --env-file .env -f deploy/compose/docker-compose.dev.yml up -d --build saas-api saas-rq-worker
 ```
 
 ## 17) Stop Demo Stack
 
 ```bash
-docker compose --env-file .env -f deploy/compose/docker-compose.dev.yml stop saas-api saas-rq-worker redis
+docker compose --env-file .env -f deploy/compose/docker-compose.dev.yml stop saas-api saas-rq-worker
 ```
