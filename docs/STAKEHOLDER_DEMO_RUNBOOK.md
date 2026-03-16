@@ -148,6 +148,8 @@ echo "FILE_ID=$FILE_ID"
 
 ## 9) Tenant API: Create Parse Job (Idempotency Demo)
 
+`POST /v1/parse-jobs` is async and may return `202 Accepted`.
+
 ```bash
 RESP1=$(curl -sS -X POST "$BASE_URL/v1/parse-jobs" \
   -H "X-API-Key: $TENANT_API_KEY" \
@@ -161,7 +163,7 @@ RESP1=$(curl -sS -X POST "$BASE_URL/v1/parse-jobs" \
 
 HTTP_CODE_1="${RESP1##*$'\n'}"
 PARSE_JSON_1="${RESP1%$'\n'*}"
-if [[ "$HTTP_CODE_1" != "200" && "$HTTP_CODE_1" != "201" ]]; then
+if [[ "$HTTP_CODE_1" != "200" && "$HTTP_CODE_1" != "201" && "$HTTP_CODE_1" != "202" ]]; then
   echo "Parse job create failed with HTTP $HTTP_CODE_1"
   echo "$PARSE_JSON_1"
   exit 1
@@ -184,7 +186,7 @@ RESP2=$(curl -sS -X POST "$BASE_URL/v1/parse-jobs" \
 
 HTTP_CODE_2="${RESP2##*$'\n'}"
 PARSE_JSON_2="${RESP2%$'\n'*}"
-if [[ "$HTTP_CODE_2" != "200" && "$HTTP_CODE_2" != "201" ]]; then
+if [[ "$HTTP_CODE_2" != "200" && "$HTTP_CODE_2" != "201" && "$HTTP_CODE_2" != "202" ]]; then
   echo "Parse job idempotent replay failed with HTTP $HTTP_CODE_2"
   echo "$PARSE_JSON_2"
   exit 1
@@ -280,7 +282,7 @@ RESP=$(curl -sS -X POST "$BASE_URL/v1/reports" \
 HTTP_CODE="${RESP##*$'\n'}"
 REPORT_JSON="${RESP%$'\n'*}"
 
-if [[ "$HTTP_CODE" != "200" && "$HTTP_CODE" != "201" ]]; then
+if [[ "$HTTP_CODE" != "200" && "$HTTP_CODE" != "201" && "$HTTP_CODE" != "202" ]]; then
   echo "Create report failed with HTTP $HTTP_CODE"
   echo "$REPORT_JSON"
   exit 1

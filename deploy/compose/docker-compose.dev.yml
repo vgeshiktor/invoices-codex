@@ -25,23 +25,12 @@ services:
       PYTHONPATH: /app/src
       SAAS_CONTROL_PLANE_API_KEY: ${SAAS_CONTROL_PLANE_API_KEY:-dev-control-plane-key}
       SAAS_AUTH_ACCESS_TOKEN_SECRET: ${SAAS_AUTH_ACCESS_TOKEN_SECRET:-dev-auth-access-token-secret}
+      SAAS_DATABASE_URL: sqlite:////data/files/invoices_saas.db
+      SAAS_STORAGE_URL: local:///data/files/saas_storage
+      SAAS_REDIS_URL: redis://redis:6379/0
     command:
-      - python
-      - -m
-      - invplatform.cli.saas_api
-      - --host
-      - 0.0.0.0
-      - --port
-      - "8081"
-      - --database-url
-      - sqlite:////data/files/invoices_saas.db
-      - --storage-url
-      - local:///data/files/saas_storage
-      - --redis-url
-      - redis://redis:6379/0
-      - --control-plane-api-key
-      - ${SAAS_CONTROL_PLANE_API_KEY:-dev-control-plane-key}
-      - --allow-insecure-auth-cookie
+      - /bin/sh
+      - /app/scripts/saas_api_entrypoint.sh
     ports: ["8081:8081"]
     volumes:
       - ../../storage:/data/files

@@ -148,7 +148,7 @@ run-saas-demo-up: ## Start SaaS demo stack and wait for API readiness
 	docker compose --env-file .env -f deploy/compose/docker-compose.dev.yml up -d --build saas-api saas-rq-worker
 	@echo "Waiting for SaaS API readiness on http://127.0.0.1:8081/healthz ..."
 	@for i in $$(seq 1 90); do \
-		if curl -fsS http://127.0.0.1:8081/healthz >/dev/null; then \
+		if curl -fsS http://127.0.0.1:8081/healthz >/dev/null 2>&1; then \
 			echo "SaaS API is ready."; \
 			exit 0; \
 		fi; \
