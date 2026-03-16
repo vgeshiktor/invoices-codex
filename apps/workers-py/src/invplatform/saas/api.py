@@ -62,6 +62,14 @@ class ApiAppConfig:
         "127.0.0.1",
     )
     provider_oauth_allow_insecure_local_redirect: bool = True
+    cors_allow_origins: tuple[str, ...] = (
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+        "http://127.0.0.1:4173",
+        "http://localhost:4173",
+        "http://127.0.0.1:3000",
+        "http://localhost:3000",
+    )
 
 
 def _normalize_action(method: str, route_path: str) -> str:
@@ -275,6 +283,7 @@ def create_app(config: ApiAppConfig | None = None):
             Security,
             UploadFile,
         )
+        from fastapi.middleware.cors import CORSMiddleware
         from fastapi.responses import (
             HTMLResponse,
             JSONResponse,
@@ -301,6 +310,15 @@ def create_app(config: ApiAppConfig | None = None):
         redoc_url="/redoc",
         openapi_url="/openapi.json",
     )
+    if cfg.cors_allow_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=list(cfg.cors_allow_origins),
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+            expose_headers=["X-Request-ID"],
+        )
     app.state.config = asdict(cfg)
     app.state.service = service
     app.state.storage = storage
@@ -876,9 +894,7 @@ def create_app(config: ApiAppConfig | None = None):
         tenant_id: str = Depends(get_tenant_id),
         service: SaaSService = Depends(get_service),
     ) -> dict[str, object]:
-        row = service.get_collection_job(
-            tenant_id=tenant_id, collection_job_id=collection_job_id
-        )
+        row = service.get_collection_job(tenant_id=tenant_id, collection_job_id=collection_job_id)
         if row is None:
             raise HTTPException(status_code=404, detail="collection job not found")
         return _collection_job_to_dict(row)
