@@ -793,6 +793,84 @@ def test_auth_login_me_refresh_logout_flow(tmp_path: Path) -> None:
     assert denied.json()["error"]["code"] == "AUTH_ACCESS_INVALID"
 
 
+def test_runtime_endpoints_accept_bearer_token_without_api_key(tmp_path: Path) -> None:
+    client, _api_key, tenant_id = _client(tmp_path)
+    app = cast(Any, client.app)
+    app.state.service.create_tenant_user(
+        tenant_id=tenant_id,
+        email="ops-runtime@example.test",
+        password="secret-123",
+        role="admin",
+    )
+    with app.state.service.session_factory() as session:
+        session.info["disable_tenant_guard"] = True
+        tenant = session.execute(
+            select(Tenant).where(Tenant.id == tenant_id)
+        ).scalar_one()
+
+    login = client.post(
+        "/auth/login",
+        json={
+            "email": "ops-runtime@example.test",
+            "password": "secret-123",
+            "tenant_slug": tenant.slug,
+        },
+    )
+    assert login.status_code == 200
+    access_token = login.json()["access_token"]
+    assert access_token
+
+    providers = client.get(
+        "/v1/providers?limit=10&offset=0",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert providers.status_code == 200
+    assert providers.headers.get("x-request-id")
+    assert providers.json()["items"] == []
+    assert providers.json()["total"] == 0
+
+
+def test_runtime_endpoint_rejects_api_key_and_bearer_tenant_mismatch(
+    tmp_path: Path,
+) -> None:
+    client, _api_key, tenant_id = _client(tmp_path)
+    app = cast(Any, client.app)
+    _other_tenant, other_key = app.state.service.bootstrap_tenant("Other Tenant")
+    app.state.service.create_tenant_user(
+        tenant_id=tenant_id,
+        email="ops-mismatch@example.test",
+        password="secret-123",
+        role="admin",
+    )
+    with app.state.service.session_factory() as session:
+        session.info["disable_tenant_guard"] = True
+        tenant = session.execute(
+            select(Tenant).where(Tenant.id == tenant_id)
+        ).scalar_one()
+
+    login = client.post(
+        "/auth/login",
+        json={
+            "email": "ops-mismatch@example.test",
+            "password": "secret-123",
+            "tenant_slug": tenant.slug,
+        },
+    )
+    assert login.status_code == 200
+    access_token = login.json()["access_token"]
+    assert access_token
+
+    mismatched = client.get(
+        "/v1/providers?limit=10&offset=0",
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "X-API-Key": other_key,
+        },
+    )
+    assert mismatched.status_code == 403
+    assert mismatched.json()["detail"] == "tenant mismatch between API key and bearer token"
+
+
 def test_auth_login_invalid_credentials_returns_envelope(tmp_path: Path) -> None:
     client, _api_key, tenant_id = _client(tmp_path)
     app = cast(Any, client.app)

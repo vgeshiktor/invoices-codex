@@ -12,13 +12,15 @@ Canonical contract source:
 
 This is the current baseline in `apps/workers-py/src/invplatform/saas`:
 
-- Runtime auth is API-key based (`X-API-Key`) on `/v1/*`.
+- Runtime auth on `/v1/*` accepts either API key (`X-API-Key`) or bearer access token (`Authorization: Bearer ...`).
 - Tenant resolution is done in dependency `get_tenant_id` (`api.py`), which:
-  - returns `401 missing API key` when header is absent.
-  - returns `401 invalid API key` when key cannot be resolved or is revoked.
+  - returns `401 missing API key or bearer token` when both credentials are absent.
+  - returns `401 invalid API key` when API key cannot be resolved or is revoked.
+  - returns `401` auth error when bearer token is missing/expired/invalid.
+  - returns `403 tenant mismatch between API key and bearer token` when both credentials are present but resolve to different tenants.
 - API key revocation is immediate: `auth.resolve_tenant_id_from_api_key` rejects revoked keys (`auth.py`).
 - Request middleware always sets/returns `X-Request-ID` and captures metrics.
-- Request middleware writes `api.*` audit events only when tenant can be resolved before handler execution.
+- Request middleware writes `api.*` audit events only when tenant can be resolved from valid runtime credentials before handler execution.
 - Tenant isolation is enforced by SQLAlchemy guard + explicit tenant repository filters (`db.py`, `repository.py`).
 - Control plane auth is separate (`X-Control-Plane-Key`) and should remain independent from tenant user sessions.
 

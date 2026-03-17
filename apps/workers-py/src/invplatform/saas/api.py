@@ -455,21 +455,67 @@ def create_app(config: ApiAppConfig | None = None):
             samesite="lax",
         )
 
+    def _extract_bearer_token(raw_authorization: str | None) -> str | None:
+        if raw_authorization is None:
+            return None
+        scheme, separator, token = raw_authorization.partition(" ")
+        if separator != " " or scheme.lower() != "bearer":
+            raise HTTPException(status_code=401, detail="invalid bearer token")
+        normalized_token = token.strip()
+        if not normalized_token:
+            raise HTTPException(status_code=401, detail="missing bearer token")
+        return normalized_token
+
+    def _resolve_runtime_tenant_id(
+        request: Request,
+        *,
+        x_api_key: str | None,
+        service: SaaSService,
+    ) -> str | None:
+        api_key_tenant_id: str | None = None
+        if x_api_key:
+            tenant = service.get_tenant_by_api_key(x_api_key)
+            if tenant is None:
+                raise HTTPException(status_code=401, detail="invalid API key")
+            api_key_tenant_id = tenant.id
+
+        bearer_tenant_id: str | None = None
+        access_token = _extract_bearer_token(request.headers.get("Authorization"))
+        if access_token is not None:
+            try:
+                auth_result = service.get_current_user(access_token=access_token)
+            except AuthError as exc:
+                raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+            bearer_tenant_id = auth_result.tenant.id
+
+        if (
+            api_key_tenant_id is not None
+            and bearer_tenant_id is not None
+            and api_key_tenant_id != bearer_tenant_id
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="tenant mismatch between API key and bearer token",
+            )
+        return bearer_tenant_id or api_key_tenant_id
+
     def get_tenant_id(
         request: Request,
         x_api_key: str | None = Security(api_key_header),
         service: SaaSService = Depends(get_service),
     ) -> str:
-        if not x_api_key:
-            raise HTTPException(status_code=401, detail="missing API key")
         cached_tenant_id = getattr(request.state, "tenant_id", None)
         if isinstance(cached_tenant_id, str) and cached_tenant_id:
             return cached_tenant_id
-        tenant = service.get_tenant_by_api_key(x_api_key)
-        if tenant is None:
-            raise HTTPException(status_code=401, detail="invalid API key")
-        request.state.tenant_id = tenant.id
-        return tenant.id
+        tenant_id = _resolve_runtime_tenant_id(
+            request,
+            x_api_key=x_api_key,
+            service=service,
+        )
+        if tenant_id is None:
+            raise HTTPException(status_code=401, detail="missing API key or bearer token")
+        request.state.tenant_id = tenant_id
+        return tenant_id
 
     @app.middleware("http")
     async def request_audit_middleware(request: Request, call_next):  # type: ignore[no-untyped-def]
@@ -481,11 +527,16 @@ def create_app(config: ApiAppConfig | None = None):
         tenant_id: str | None = None
         if request.url.path.startswith("/v1"):
             api_key = request.headers.get("X-API-Key")
-            if api_key:
-                tenant = service.get_tenant_by_api_key(api_key)
-                if tenant is not None:
-                    tenant_id = tenant.id
-                    request.state.tenant_id = tenant_id
+            try:
+                tenant_id = _resolve_runtime_tenant_id(
+                    request,
+                    x_api_key=api_key,
+                    service=service,
+                )
+            except HTTPException:
+                tenant_id = None
+            if tenant_id is not None:
+                request.state.tenant_id = tenant_id
 
         try:
             response = await call_next(request)
