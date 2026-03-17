@@ -1,3 +1,6 @@
+import { AUTH_ACCESS_TOKEN_STORAGE_KEY } from '../../../app/authSession.constants';
+import { normalizeApiError } from '../../../shared/api/client';
+import { frontendEnv } from '../../../shared/config/env';
 import type { ProviderSettingsItem, ProviderType } from '../model/providerSettings';
 
 export interface ProviderSettingsAdapter {
@@ -5,6 +8,24 @@ export interface ProviderSettingsAdapter {
   connectProvider: (providerType: ProviderType) => Promise<ProviderSettingsItem>;
   disconnectProvider: (providerType: ProviderType) => Promise<ProviderSettingsItem>;
   reauthProvider: (providerType: ProviderType) => Promise<ProviderSettingsItem>;
+}
+
+interface ProviderApiItem {
+  id: string;
+  provider_type: ProviderType;
+  display_name: string;
+  connection_status: ProviderSettingsItem['connectionStatus'];
+  last_error_message: string | null;
+  updated_at: string;
+}
+
+interface ProviderListResponse {
+  items?: ProviderApiItem[];
+}
+
+interface ProviderOAuthStartResponse {
+  provider: ProviderApiItem;
+  authorization_url?: string;
 }
 
 const PROVIDER_ORDER: ProviderType[] = ['gmail', 'outlook'];
@@ -28,24 +49,104 @@ export const createDefaultProviderItems = (): ProviderSettingsItem[] =>
     updatedAt: nowIso(),
   }));
 
-const withUpdatedStatus = (
-  provider: ProviderSettingsItem,
-  connectionStatus: ProviderSettingsItem['connectionStatus'],
-): ProviderSettingsItem => ({
-  ...provider,
-  connectionStatus,
-  lastErrorMessage: connectionStatus === 'error' ? provider.lastErrorMessage : null,
-  updatedAt: nowIso(),
+const readStoredAccessToken = (): string | null => {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  const raw = window.localStorage.getItem(AUTH_ACCESS_TOKEN_STORAGE_KEY);
+  if (!raw) {
+    return null;
+  }
+
+  const value = raw.trim();
+  return value.length > 0 ? value : null;
+};
+
+const getRuntimeAuthHeaders = (): Record<string, string> | undefined => {
+  const accessToken = readStoredAccessToken();
+  if (accessToken) {
+    return {
+      Authorization: `Bearer ${accessToken}`,
+    };
+  }
+
+  if (frontendEnv.apiKey) {
+    return {
+      'X-API-Key': frontendEnv.apiKey,
+    };
+  }
+
+  return undefined;
+};
+
+const mapProvider = (provider: ProviderApiItem): ProviderSettingsItem => ({
+  connectionStatus: provider.connection_status,
+  displayName: provider.display_name,
+  id: provider.id,
+  lastErrorMessage: provider.last_error_message,
+  providerType: provider.provider_type,
+  updatedAt: provider.updated_at,
 });
 
-const updateByProviderType = (
-  providers: ProviderSettingsItem[],
-  providerType: ProviderType,
-  update: (provider: ProviderSettingsItem) => ProviderSettingsItem,
-): ProviderSettingsItem[] =>
-  providers.map((provider) => (provider.providerType === providerType ? update(provider) : provider));
+const isProviderApiItem = (value: unknown): value is ProviderApiItem => {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
 
-const findByProviderType = (
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.id === 'string' &&
+    (record.provider_type === 'gmail' || record.provider_type === 'outlook') &&
+    typeof record.display_name === 'string' &&
+    (record.connection_status === 'connected' ||
+      record.connection_status === 'disconnected' ||
+      record.connection_status === 'error') &&
+    typeof record.updated_at === 'string'
+  );
+};
+
+const parseProviderList = (value: unknown): ProviderSettingsItem[] => {
+  if (!value || typeof value !== 'object') {
+    return [];
+  }
+
+  const items = (value as ProviderListResponse).items;
+  if (!Array.isArray(items)) {
+    return [];
+  }
+
+  return items.filter(isProviderApiItem).map((item) => mapProvider(item));
+};
+
+const parseProviderItem = (value: unknown): ProviderSettingsItem => {
+  if (isProviderApiItem(value)) {
+    return mapProvider(value);
+  }
+
+  if (
+    value &&
+    typeof value === 'object' &&
+    'provider' in value &&
+    isProviderApiItem((value as ProviderOAuthStartResponse).provider)
+  ) {
+    return mapProvider((value as ProviderOAuthStartResponse).provider);
+  }
+
+  throw new Error('Malformed provider response from API');
+};
+
+const buildRedirectUri = (): string => {
+  if (typeof window === 'undefined') {
+    return 'http://127.0.0.1:4173/providers';
+  }
+  return `${window.location.origin}/providers`;
+};
+
+const sortProviders = (providers: ProviderSettingsItem[]): ProviderSettingsItem[] =>
+  [...providers].sort((left, right) => left.providerType.localeCompare(right.providerType));
+
+const findProviderByType = (
   providers: ProviderSettingsItem[],
   providerType: ProviderType,
 ): ProviderSettingsItem => {
@@ -56,37 +157,143 @@ const findByProviderType = (
   return provider;
 };
 
-// BE-102 dependency:
-// replace this local adapter with generated SDK calls once OAuth lifecycle
-// endpoints are available in the OpenAPI snapshot.
+type FetchImpl = typeof fetch;
+
+interface LiveAdapterOptions {
+  apiBaseUrl?: string;
+  fetchImpl?: FetchImpl;
+}
+
+export const createProviderSettingsApiAdapter = (
+  options: LiveAdapterOptions = {},
+): ProviderSettingsAdapter => {
+  const apiBaseUrl = options.apiBaseUrl ?? frontendEnv.apiBaseUrl;
+  const fetchImpl = options.fetchImpl ?? fetch;
+
+  const requestJson = async (
+    path: string,
+    init?: RequestInit,
+  ): Promise<unknown> => {
+    const response = await fetchImpl(`${apiBaseUrl}${path}`, {
+      ...init,
+      credentials: 'include',
+      headers: {
+        ...(getRuntimeAuthHeaders() ?? {}),
+        ...(init?.headers ?? {}),
+      },
+    });
+
+    let body: unknown = undefined;
+    const contentType = response.headers.get('content-type') ?? '';
+    if (contentType.includes('application/json') || contentType.includes('+json')) {
+      body = await response.json();
+    }
+
+    if (!response.ok) {
+      const apiError = await normalizeApiError(new Error('Provider request failed'), response);
+      throw new Error(apiError.message);
+    }
+
+    return body;
+  };
+
+  const listProviderItems = async (): Promise<ProviderSettingsItem[]> => {
+    const response = await requestJson('/v1/providers?limit=10&offset=0', {
+      method: 'GET',
+    });
+
+    return sortProviders(parseProviderList(response));
+  };
+
+  const getProviderId = async (providerType: ProviderType): Promise<string> => {
+    const providers = await listProviderItems();
+    return findProviderByType(providers, providerType).id;
+  };
+
+  return {
+    listProviders: listProviderItems,
+    connectProvider: async (providerType) => {
+      const providerId = await getProviderId(providerType);
+      const response = await requestJson(`/v1/providers/${encodeURIComponent(providerId)}/oauth/start`, {
+        body: JSON.stringify({
+          redirect_uri: buildRedirectUri(),
+        }),
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        method: 'POST',
+      });
+
+      return parseProviderItem(response);
+    },
+    disconnectProvider: async (providerType) => {
+      const providerId = await getProviderId(providerType);
+      const response = await requestJson(`/v1/providers/${encodeURIComponent(providerId)}/oauth/revoke`, {
+        method: 'POST',
+      });
+
+      return parseProviderItem(response);
+    },
+    reauthProvider: async (providerType) => {
+      const providerId = await getProviderId(providerType);
+      const response = await requestJson(`/v1/providers/${encodeURIComponent(providerId)}/oauth/refresh`, {
+        method: 'POST',
+      });
+
+      return parseProviderItem(response);
+    },
+  };
+};
+
 export const createLocalProviderSettingsAdapter = (): ProviderSettingsAdapter => {
   let providers = createDefaultProviderItems();
 
   return {
     listProviders: async () => providers.map(cloneProvider),
     connectProvider: async (providerType) => {
-      providers = updateByProviderType(providers, providerType, (provider) =>
-        withUpdatedStatus(provider, 'connected'),
+      providers = providers.map((provider) =>
+        provider.providerType === providerType
+          ? {
+              ...provider,
+              connectionStatus: 'connected',
+              lastErrorMessage: null,
+              updatedAt: nowIso(),
+            }
+          : provider,
       );
-      return cloneProvider(findByProviderType(providers, providerType));
+      return cloneProvider(findProviderByType(providers, providerType));
     },
     disconnectProvider: async (providerType) => {
-      providers = updateByProviderType(providers, providerType, (provider) =>
-        withUpdatedStatus(provider, 'disconnected'),
+      providers = providers.map((provider) =>
+        provider.providerType === providerType
+          ? {
+              ...provider,
+              connectionStatus: 'disconnected',
+              lastErrorMessage: null,
+              updatedAt: nowIso(),
+            }
+          : provider,
       );
-      return cloneProvider(findByProviderType(providers, providerType));
+      return cloneProvider(findProviderByType(providers, providerType));
     },
     reauthProvider: async (providerType) => {
-      const provider = findByProviderType(providers, providerType);
+      const provider = findProviderByType(providers, providerType);
       if (provider.connectionStatus === 'disconnected') {
         throw new Error(`${provider.displayName} must be connected before re-auth`);
       }
-      providers = updateByProviderType(providers, providerType, (currentProvider) =>
-        withUpdatedStatus(currentProvider, 'connected'),
+      providers = providers.map((currentProvider) =>
+        currentProvider.providerType === providerType
+          ? {
+              ...currentProvider,
+              connectionStatus: 'connected',
+              lastErrorMessage: null,
+              updatedAt: nowIso(),
+            }
+          : currentProvider,
       );
-      return cloneProvider(findByProviderType(providers, providerType));
+      return cloneProvider(findProviderByType(providers, providerType));
     },
   };
 };
 
-export const providerSettingsAdapter = createLocalProviderSettingsAdapter();
+export const providerSettingsAdapter = createProviderSettingsApiAdapter();
