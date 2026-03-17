@@ -1,5 +1,6 @@
 import { frontendEnv } from '../../../shared/config/env';
 import { normalizeApiError, type ApiError } from '../../../shared/api/client';
+import { getRuntimeAuthHeaders } from '../../../shared/api/runtimeAuth';
 
 export type ReportArtifactDownloadResult =
   | {
@@ -41,11 +42,7 @@ export const downloadReportArtifact = async (
     const response = await fetch(
       `${frontendEnv.apiBaseUrl}/v1/reports/${encodeURIComponent(reportId)}/download?format=${encodeURIComponent(format)}`,
       {
-        headers: frontendEnv.apiKey
-          ? {
-              'X-API-Key': frontendEnv.apiKey,
-            }
-          : undefined,
+        headers: getRuntimeAuthHeaders(),
       },
     );
 

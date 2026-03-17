@@ -1,14 +1,39 @@
+import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
+import { AUTH_ACCESS_TOKEN_STORAGE_KEY } from '../../../app/authSession.constants';
 import { createCollectionJob } from './createCollectionJob';
 import {
-  collectionJobCreateSuccessHandler,
+  COLLECTION_JOBS_URL,
   collectionJobCreateValidationErrorHandler,
 } from '../../../test/msw/handlers';
 import { server } from '../../../test/msw/server';
 
 describe('createCollectionJob', () => {
   it('creates a collection job and returns initial run details', async () => {
-    server.use(collectionJobCreateSuccessHandler);
+    window.localStorage.setItem(AUTH_ACCESS_TOKEN_STORAGE_KEY, 'collection-token');
+    server.use(
+      http.post(COLLECTION_JOBS_URL, async ({ request }) => {
+        expect(request.headers.get('authorization')).toBe('Bearer collection-token');
+        const payload = (await request.json()) as { month_scope: string; providers: string[] };
+
+        return HttpResponse.json(
+          {
+            created_at: '2026-03-20T09:00:00+00:00',
+            id: 'col-1',
+            month_scope: payload.month_scope,
+            providers: payload.providers,
+            status: 'queued',
+            updated_at: '2026-03-20T09:00:00+00:00',
+          },
+          {
+            headers: {
+              'x-request-id': 'req-col-1',
+            },
+            status: 201,
+          },
+        );
+      }),
+    );
 
     const result = await createCollectionJob({
       month_scope: '2026-03',
@@ -27,6 +52,7 @@ describe('createCollectionJob', () => {
   });
 
   it('normalizes backend validation errors', async () => {
+    window.localStorage.setItem(AUTH_ACCESS_TOKEN_STORAGE_KEY, 'collection-token');
     server.use(collectionJobCreateValidationErrorHandler);
 
     const result = await createCollectionJob({

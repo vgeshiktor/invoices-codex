@@ -1,4 +1,5 @@
 import { apiClient, getApiRequestId, normalizeApiError, type ApiError } from '../../../shared/api/client';
+import { getRuntimeAuthHeaders } from '../../../shared/api/runtimeAuth';
 
 export type CollectionProvider = 'gmail' | 'outlook';
 
@@ -54,8 +55,8 @@ export const createCollectionJob = async (
     headers: {
       'Content-Type': 'application/json',
       'Idempotency-Key': createIdempotencyKey(),
+      ...(getRuntimeAuthHeaders() ?? {}),
     },
-    security: [{ name: 'X-API-Key', type: 'apiKey' }],
     url: '/v1/collection-jobs',
   });
 
