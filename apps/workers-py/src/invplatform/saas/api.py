@@ -895,6 +895,32 @@ def create_app(config: ApiAppConfig | None = None):
             raise _provider_http_exception(exc) from exc
         return _provider_to_dict(item)
 
+    @app.post("/v1/providers/{provider_id}/test-connection")
+    def test_provider_connection(
+        provider_id: str,
+        request: Request,
+        tenant_id: str = Depends(get_tenant_id),
+        actor: str | None = Depends(get_actor),
+        service: SaaSService = Depends(get_service),
+    ) -> dict[str, object]:
+        request_id = getattr(request.state, "request_id", None)
+        try:
+            result = service.test_provider_connection(
+                tenant_id=tenant_id,
+                provider_id=provider_id,
+                actor=actor,
+                request_id=request_id,
+            )
+        except ProviderConfigError as exc:
+            raise _provider_http_exception(exc) from exc
+        return {
+            "provider": _provider_to_dict(result.provider),
+            "status": result.status,
+            "message": result.message,
+            "tested_at": _iso(result.tested_at),
+            "request_id": request_id,
+        }
+
     @app.post("/v1/collection-jobs", status_code=201)
     def create_collection_job(
         payload: CollectionJobCreateRequest,

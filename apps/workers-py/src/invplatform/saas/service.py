@@ -92,6 +92,14 @@ class ProviderOAuthStartResult:
     state_expires_at: datetime
 
 
+@dataclass(frozen=True)
+class ProviderConnectionTestResult:
+    provider: ProviderConfig
+    status: str
+    message: str
+    tested_at: datetime
+
+
 class AuthError(RuntimeError):
     def __init__(self, *, code: str, message: str, status_code: int = 401):
         super().__init__(message)
@@ -1794,6 +1802,97 @@ class SaaSService:
                 session.refresh(row)
                 self._normalize_provider_row_datetimes(row)
                 return row
+
+    def test_provider_connection(
+        self,
+        tenant_id: str,
+        provider_id: str,
+        *,
+        actor: str | None = None,
+        request_id: str | None = None,
+    ) -> ProviderConnectionTestResult:
+        now = _utcnow()
+        with self.session_factory() as session:
+            with self._tenant_scope(session, tenant_id):
+                row = self._provider_row_or_error(
+                    session, tenant_id=tenant_id, provider_id=provider_id
+                )
+                is_disconnected = row.connection_status == "disconnected"
+                is_missing_token = not row.oauth_access_token_enc
+                token_expires_at = _coerce_utc(row.token_expires_at) if row.token_expires_at else None
+                is_token_expired = bool(token_expires_at and token_expires_at <= now)
+
+                if is_disconnected or is_missing_token or is_token_expired:
+                    if is_disconnected:
+                        message = "provider is not connected"
+                        reason = "not_connected"
+                    elif is_token_expired:
+                        message = "provider access token has expired"
+                        reason = "token_expired"
+                        row.connection_status = "error"
+                    else:
+                        message = "provider credentials are missing; reconnect provider"
+                        reason = "missing_access_token"
+                        row.connection_status = "error"
+
+                    row.last_error_code = "PROVIDER_TEST_CONNECTION_FAILED"
+                    row.last_error_message = message
+                    row.updated_at = now
+                    session.add(
+                        AuditEvent(
+                            tenant_id=tenant_id,
+                            event_type="provider.test_connection.failed",
+                            actor=actor,
+                            payload_json=json.dumps(
+                                {
+                                    "provider_id": row.id,
+                                    "provider_type": row.provider_type,
+                                    "request_id": request_id,
+                                    "reason": reason,
+                                    "tested_at": now.isoformat(),
+                                }
+                            ),
+                        )
+                    )
+                    session.commit()
+                    session.refresh(row)
+                    self._normalize_provider_row_datetimes(row)
+                    return ProviderConnectionTestResult(
+                        provider=row,
+                        status="failure",
+                        message=message,
+                        tested_at=now,
+                    )
+
+                row.connection_status = "connected"
+                row.last_successful_sync_at = now
+                row.last_error_code = None
+                row.last_error_message = None
+                row.updated_at = now
+                session.add(
+                    AuditEvent(
+                        tenant_id=tenant_id,
+                        event_type="provider.test_connection.succeeded",
+                        actor=actor,
+                        payload_json=json.dumps(
+                            {
+                                "provider_id": row.id,
+                                "provider_type": row.provider_type,
+                                "request_id": request_id,
+                                "tested_at": now.isoformat(),
+                            }
+                        ),
+                    )
+                )
+                session.commit()
+                session.refresh(row)
+                self._normalize_provider_row_datetimes(row)
+                return ProviderConnectionTestResult(
+                    provider=row,
+                    status="success",
+                    message="provider connection verified",
+                    tested_at=now,
+                )
 
     def register_file(
         self,
