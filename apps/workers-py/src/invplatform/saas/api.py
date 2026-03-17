@@ -20,6 +20,8 @@ from .models import (
     Report,
     ReportArtifact,
     Tenant,
+    TenantMembership,
+    User,
 )
 from .queue import build_queue
 from .service import (
@@ -100,6 +102,29 @@ def _tenant_to_dict(row: Tenant) -> dict[str, object]:
         "slug": row.slug,
         "name": row.name,
         "created_at": _iso(row.created_at),
+    }
+
+
+def _user_to_dict(row: User) -> dict[str, object]:
+    return {
+        "id": row.id,
+        "email": row.email,
+        "full_name": row.full_name,
+        "is_active": bool(row.is_active),
+        "created_at": _iso(row.created_at),
+        "updated_at": _iso(row.updated_at),
+    }
+
+
+def _membership_to_dict(row: TenantMembership) -> dict[str, object]:
+    return {
+        "id": row.id,
+        "tenant_id": row.tenant_id,
+        "user_id": row.user_id,
+        "role": row.role,
+        "status": row.status,
+        "created_at": _iso(row.created_at),
+        "updated_at": _iso(row.updated_at),
     }
 
 
@@ -339,6 +364,11 @@ def create_app(config: ApiAppConfig | None = None):
 
     class TenantBootstrapRequest(BaseModel):
         name: str
+
+    class TenantFirstUserBootstrapRequest(BaseModel):
+        email: str
+        password: str
+        full_name: str | None = None
 
     class AuthLoginRequest(BaseModel):
         email: str
@@ -1174,6 +1204,42 @@ def create_app(config: ApiAppConfig | None = None):
         return {
             "tenant": _tenant_to_dict(tenant),
             "api_key": {"plain_text": plain_text_key},
+        }
+
+    @app.post("/v1/control-plane/tenants/{tenant_id}/bootstrap-user", status_code=201)
+    def bootstrap_control_plane_first_user(
+        tenant_id: str,
+        request: TenantFirstUserBootstrapRequest,
+        actor: str | None = Depends(get_actor),
+        _control_plane: None = Depends(require_control_plane_access),
+        service: SaaSService = Depends(get_service),
+    ) -> dict[str, object]:
+        email = request.email.strip()
+        if not email:
+            raise HTTPException(status_code=400, detail="email is required")
+        if not request.password:
+            raise HTTPException(status_code=400, detail="password is required")
+        try:
+            user, membership = service.bootstrap_tenant_admin_user(
+                tenant_id=tenant_id,
+                email=email,
+                password=request.password,
+                full_name=request.full_name,
+                actor=actor,
+            )
+        except ValueError as exc:
+            message = str(exc)
+            if message == "tenant not found":
+                raise HTTPException(status_code=404, detail=message) from exc
+            if message == "tenant already has users":
+                raise HTTPException(status_code=409, detail=message) from exc
+            if message == "password does not match existing user":
+                raise HTTPException(status_code=409, detail=message) from exc
+            raise HTTPException(status_code=400, detail=message) from exc
+        return {
+            "tenant_id": tenant_id,
+            "user": _user_to_dict(user),
+            "membership": _membership_to_dict(membership),
         }
 
     @app.get("/v1/dashboard/summary")

@@ -1030,6 +1030,83 @@ class SaaSService:
             session.refresh(tenant)
             return tenant, api_key_material.plain_text
 
+    def bootstrap_tenant_admin_user(
+        self,
+        *,
+        tenant_id: str,
+        email: str,
+        password: str,
+        full_name: str | None = None,
+        actor: str | None = None,
+    ) -> tuple[User, TenantMembership]:
+        normalized_email = email.strip().lower()
+        normalized_full_name = (full_name or "").strip() or None
+        if not normalized_email:
+            raise ValueError("email is required")
+        if not auth.is_valid_email(normalized_email):
+            raise ValueError("email format is invalid")
+        if not password:
+            raise ValueError("password is required")
+
+        with self.session_factory() as session:
+            session.info["disable_tenant_guard"] = True
+            tenant = session.execute(
+                select(Tenant).where(Tenant.id == tenant_id)
+            ).scalar_one_or_none()
+            if tenant is None:
+                raise ValueError("tenant not found")
+
+            existing_tenant_membership = session.execute(
+                select(TenantMembership.id).where(TenantMembership.tenant_id == tenant_id).limit(1)
+            ).scalar_one_or_none()
+            if existing_tenant_membership is not None:
+                raise ValueError("tenant already has users")
+
+            user = session.execute(
+                select(User).where(User.email_normalized == normalized_email)
+            ).scalar_one_or_none()
+            if user is None:
+                user = User(
+                    email=email.strip(),
+                    email_normalized=normalized_email,
+                    password_hash=auth.hash_password(password),
+                    full_name=normalized_full_name,
+                    is_active=True,
+                )
+                session.add(user)
+                session.flush()
+            elif not auth.verify_password(password, user.password_hash):
+                raise ValueError("password does not match existing user")
+
+            membership = TenantMembership(
+                tenant_id=tenant_id,
+                user_id=user.id,
+                role="admin",
+                status="active",
+            )
+            session.add(membership)
+            session.flush()
+            session.add(
+                AuditEvent(
+                    tenant_id=tenant_id,
+                    event_type="tenant.user.bootstrap",
+                    actor=actor,
+                    payload_json=json.dumps(
+                        {
+                            "user_id": user.id,
+                            "email": user.email,
+                            "membership_id": membership.id,
+                            "role": membership.role,
+                            "status": membership.status,
+                        }
+                    ),
+                )
+            )
+            session.commit()
+            session.refresh(user)
+            session.refresh(membership)
+            return user, membership
+
     def list_tenants(self, limit: int = 100, offset: int = 0) -> tuple[list[Tenant], int]:
         if limit < 1:
             raise ValueError("limit must be >= 1")

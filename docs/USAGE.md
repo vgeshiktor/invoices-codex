@@ -364,7 +364,25 @@ if [ "$HTTP_CODE" != "201" ]; then
   echo "$BOOTSTRAP_JSON"
 else
   echo "$BOOTSTRAP_JSON"
+  TENANT_ID=$(jq -r '.tenant.id' <<<"$BOOTSTRAP_JSON")
+  TENANT_SLUG=$(jq -r '.tenant.slug' <<<"$BOOTSTRAP_JSON")
   TENANT_API_KEY=$(jq -r '.api_key.plain_text' <<<"$BOOTSTRAP_JSON")
+  DEMO_ADMIN_EMAIL="owner@example.test"
+  DEMO_ADMIN_PASSWORD="secret-123"
+  USER_BOOTSTRAP_HTTP=$(curl -sS -X POST "$BASE_URL/v1/control-plane/tenants/$TENANT_ID/bootstrap-user" \
+    -H "X-Control-Plane-Key: $SAAS_CONTROL_PLANE_API_KEY" \
+    -H "Content-Type: application/json" \
+    -d "{\"email\":\"$DEMO_ADMIN_EMAIL\",\"password\":\"$DEMO_ADMIN_PASSWORD\",\"full_name\":\"Demo Owner\"}" \
+    -o /tmp/tenant_first_user_bootstrap.json \
+    -w '%{http_code}')
+  if [ "$USER_BOOTSTRAP_HTTP" != "201" ]; then
+    echo "first-user bootstrap failed (HTTP $USER_BOOTSTRAP_HTTP)"
+    cat /tmp/tenant_first_user_bootstrap.json
+  else
+    echo "TENANT_SLUG=$TENANT_SLUG"
+    echo "DEMO_ADMIN_EMAIL=$DEMO_ADMIN_EMAIL"
+    echo "DEMO_ADMIN_PASSWORD=$DEMO_ADMIN_PASSWORD"
+  fi
   echo "TENANT_API_KEY=$TENANT_API_KEY"
 fi
 
