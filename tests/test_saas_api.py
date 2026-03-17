@@ -275,6 +275,7 @@ def test_openapi_exposes_api_key_security_scheme(tmp_path: Path) -> None:
     assert "/v1/providers/{provider_id}/oauth/callback" in body["paths"]
     assert "/v1/providers/{provider_id}/oauth/refresh" in body["paths"]
     assert "/v1/providers/{provider_id}/oauth/revoke" in body["paths"]
+    assert "/v1/providers/{provider_id}/test-connection" in body["paths"]
     assert "/v1/collection-jobs" in body["paths"]
     assert "/v1/control-plane/tenants" in body["paths"]
     assert body["paths"]["/v1/files"]["post"]["security"] == [{"ApiKeyAuth": []}]
@@ -289,6 +290,9 @@ def test_openapi_exposes_api_key_security_scheme(tmp_path: Path) -> None:
         "security"
     ] == [{"ApiKeyAuth": []}]
     assert body["paths"]["/v1/providers/{provider_id}/oauth/revoke"]["post"][
+        "security"
+    ] == [{"ApiKeyAuth": []}]
+    assert body["paths"]["/v1/providers/{provider_id}/test-connection"]["post"][
         "security"
     ] == [{"ApiKeyAuth": []}]
     assert body["paths"]["/v1/collection-jobs"]["get"]["security"] == [
@@ -599,6 +603,65 @@ def test_provider_oauth_lifecycle_endpoints(tmp_path: Path) -> None:
     )
     assert revoke_missing.status_code == 404
     assert revoke_missing.json()["detail"] == "provider config not found"
+
+
+def test_provider_test_connection_endpoint(tmp_path: Path) -> None:
+    client, api_key, _tenant_id = _client(tmp_path)
+    app = cast(Any, client.app)
+    _other_tenant, other_key = app.state.service.bootstrap_tenant("Other Tenant")
+    headers = {"X-API-Key": api_key, "X-Actor": "owner"}
+
+    created = client.post(
+        "/v1/providers", headers=headers, json={"provider_type": "gmail"}
+    )
+    assert created.status_code == 201
+    provider_id = created.json()["id"]
+
+    disconnected_result = client.post(
+        f"/v1/providers/{provider_id}/test-connection", headers=headers
+    )
+    assert disconnected_result.status_code == 200
+    assert disconnected_result.headers.get("x-request-id")
+    disconnected_body = disconnected_result.json()
+    assert disconnected_body["status"] == "failure"
+    assert disconnected_body["message"] == "provider is not connected"
+    assert disconnected_body["tested_at"]
+    assert disconnected_body["request_id"] == disconnected_result.headers.get("x-request-id")
+    assert disconnected_body["provider"]["id"] == provider_id
+    assert disconnected_body["provider"]["last_error_code"] == "PROVIDER_TEST_CONNECTION_FAILED"
+
+    start = client.post(
+        f"/v1/providers/{provider_id}/oauth/start",
+        headers=headers,
+        json={"redirect_uri": "https://app.example.test/oauth/callback"},
+    )
+    assert start.status_code == 200
+    state = start.json()["state"]
+    assert state
+
+    callback = client.get(
+        f"/v1/providers/{provider_id}/oauth/callback?state={state}&code=code-1",
+        headers=headers,
+    )
+    assert callback.status_code == 200
+
+    connected_result = client.post(
+        f"/v1/providers/{provider_id}/test-connection", headers=headers
+    )
+    assert connected_result.status_code == 200
+    connected_body = connected_result.json()
+    assert connected_body["status"] == "success"
+    assert connected_body["message"] == "provider connection verified"
+    assert connected_body["tested_at"]
+    assert connected_body["provider"]["id"] == provider_id
+    assert connected_body["provider"]["connection_status"] == "connected"
+
+    cross_tenant = client.post(
+        f"/v1/providers/{provider_id}/test-connection",
+        headers={"X-API-Key": other_key},
+    )
+    assert cross_tenant.status_code == 404
+    assert cross_tenant.json()["detail"] == "provider config not found"
 
 
 def test_collection_jobs_create_list_get_and_tenant_isolation(tmp_path: Path) -> None:

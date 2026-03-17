@@ -468,6 +468,70 @@ def test_provider_oauth_lifecycle_and_errors(tmp_path: Path) -> None:
         )
 
 
+def test_provider_test_connection_success_and_failure(tmp_path: Path) -> None:
+    service, _queue = _build_service(tmp_path)
+    tenant, _ = service.bootstrap_tenant("Tenant")
+    provider = service.create_provider_config(tenant.id, provider_type="gmail")
+
+    failed = service.test_provider_connection(
+        tenant.id,
+        provider.id,
+        actor="ops",
+        request_id="req-test-failed",
+    )
+    assert failed.status == "failure"
+    assert failed.message == "provider is not connected"
+    assert failed.provider.connection_status == "disconnected"
+    assert failed.provider.last_error_code == "PROVIDER_TEST_CONNECTION_FAILED"
+    assert failed.provider.last_error_message == "provider is not connected"
+
+    start = service.start_provider_oauth(
+        tenant.id,
+        provider.id,
+        redirect_uri="https://app.example.test/oauth/callback",
+        actor="ops",
+        request_id="req-test-start",
+    )
+    service.complete_provider_oauth_callback(
+        tenant.id,
+        provider.id,
+        state=start.state,
+        code="auth-code",
+        actor="ops",
+        request_id="req-test-callback",
+    )
+
+    succeeded = service.test_provider_connection(
+        tenant.id,
+        provider.id,
+        actor="ops",
+        request_id="req-test-ok",
+    )
+    assert succeeded.status == "success"
+    assert succeeded.message == "provider connection verified"
+    assert succeeded.provider.connection_status == "connected"
+    assert succeeded.provider.last_error_code is None
+    assert succeeded.provider.last_error_message is None
+    assert succeeded.provider.last_successful_sync_at is not None
+
+    with service.session_factory() as session:
+        failed_event = session.execute(
+            select(AuditEvent).where(
+                AuditEvent.tenant_id == tenant.id,
+                AuditEvent.event_type == "provider.test_connection.failed",
+            )
+        ).scalar_one_or_none()
+        assert failed_event is not None
+
+        succeeded_event = session.execute(
+            select(AuditEvent).where(
+                AuditEvent.tenant_id == tenant.id,
+                AuditEvent.event_type == "provider.test_connection.succeeded",
+            )
+        ).scalar_one_or_none()
+        assert succeeded_event is not None
+
+
 def test_create_provider_config_maps_db_unique_conflict(tmp_path: Path) -> None:
     service, _queue = _build_service(tmp_path)
     tenant, _ = service.bootstrap_tenant("Tenant")

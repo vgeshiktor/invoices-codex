@@ -151,6 +151,42 @@ Response:
 - `200` updated provider object with disconnected state and cleared OAuth token fields.
 - `404` provider not found in tenant.
 
+### `POST /v1/providers/{provider_id}/test-connection`
+
+Response `200`:
+
+```json
+{
+  "provider": {
+    "id": "uuid",
+    "tenant_id": "uuid",
+    "provider_type": "gmail",
+    "display_name": "Ops Gmail",
+    "connection_status": "connected",
+    "config": {},
+    "token_expires_at": "2026-03-14T12:00:00+00:00",
+    "last_successful_sync_at": "2026-03-14T11:00:00+00:00",
+    "last_error_code": null,
+    "last_error_message": null,
+    "created_at": "2026-03-14T10:00:00+00:00",
+    "updated_at": "2026-03-14T11:00:00+00:00"
+  },
+  "status": "success",
+  "message": "provider connection verified",
+  "tested_at": "2026-03-14T11:00:00+00:00",
+  "request_id": "req-123"
+}
+```
+
+Failure path for non-connected or misconfigured provider returns `200` with:
+- `status: "failure"`
+- actionable `message`
+- `tested_at` and `request_id`
+- provider payload with updated error metadata (`last_error_code`, `last_error_message`)
+
+Response errors:
+- `404` provider not found in tenant.
+
 ## Domain Rules
 
 - Allowed `provider_type`: `gmail`, `outlook`.
@@ -180,5 +216,7 @@ Response:
 - `provider.oauth.refresh.succeeded`
 - `provider.oauth.refresh.failed`
 - `provider.oauth.revoke.succeeded`
+- `provider.test_connection.succeeded`
+- `provider.test_connection.failed`
 
 All include tenant ID and request actor (`X-Actor`) when provided.
