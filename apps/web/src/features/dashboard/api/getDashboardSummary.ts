@@ -1,5 +1,8 @@
 import { apiClient, normalizeApiError, type ApiError } from '../../../shared/api/client';
-import type { DashboardSummaryV1DashboardSummaryGetResponse } from '../../../shared/api/generated';
+import {
+  dashboardSummaryV1DashboardSummaryGet,
+  type DashboardSummaryV1DashboardSummaryGetResponse,
+} from '../../../shared/api/generated';
 import { getRuntimeAuthHeaders } from '../../../shared/api/runtimeAuth';
 
 export type DashboardSummaryResult =
@@ -14,9 +17,9 @@ export type DashboardSummaryResult =
 
 export const getDashboardSummary = async (): Promise<DashboardSummaryResult> => {
   try {
-    const result = await apiClient.get<DashboardSummaryV1DashboardSummaryGetResponse, unknown>({
+    const result = await dashboardSummaryV1DashboardSummaryGet({
+      client: apiClient,
       headers: getRuntimeAuthHeaders(),
-      url: '/v1/dashboard/summary',
     });
 
     if (result.error !== undefined) {
