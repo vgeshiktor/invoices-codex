@@ -1,0 +1,34 @@
+{
+  "requirements": [
+    {
+      "source": "docs/NEXT_SMALL_MVP_PLAN.md",
+      "requirement": "One automated smoke validates login, providers, test connection, and dashboard access",
+      "scope": "diff",
+      "patterns": [
+        "login -> providers -> test connection -> dashboard",
+        "provider-test-result-gmail"
+      ],
+      "on_missing": "FAIL"
+    },
+    {
+      "source": "docs/STAKEHOLDER_DEMO_RUNBOOK.md",
+      "requirement": "Demo runbook is updated and executable in under 10 minutes",
+      "scope": "diff",
+      "patterns": [
+        "MVP_DEMO_RUNBOOK",
+        "npm run test:e2e -- mvp-smoke.e2e.spec.ts"
+      ],
+      "on_missing": "FAIL"
+    },
+    {
+      "source": "docs/ARCHITECTURE.md",
+      "requirement": "QA harness changes preserve a reliable frontend test boundary",
+      "scope": "diff",
+      "patterns": [
+        "npm run build && npm run preview",
+        "mvp-smoke.e2e.spec.ts"
+      ],
+      "on_missing": "FAIL"
+    }
+  ]
+}
