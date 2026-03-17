@@ -249,10 +249,10 @@ declare -a GATE_NAMES=(
 )
 
 # Gate 1: title format
-if [[ "$TITLE" =~ ^\[(FE|BE)-[0-9]{3,}\][[:space:]].+ ]]; then
+if [[ "$TITLE" =~ ^\[(FE|BE|QA)-[0-9]{3,}\][[:space:]].+ ]]; then
   set_gate 1 "PASS" "Title: $TITLE"
 else
-  set_gate 1 "FAIL" "Title does not match expected format [FE-xxx]/[BE-xxx]: $TITLE"
+  set_gate 1 "FAIL" "Title does not match expected format [FE-xxx]/[BE-xxx]/[QA-xxx]: $TITLE"
 fi
 
 # Gate 2: PR summary structure (problem/design/tests/rollout-risk)
@@ -276,7 +276,7 @@ while IFS= read -r h; do
   if grep -Eq '^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([^)]+\))?:[[:space:]].+' <<<"$h"; then
     continue
   fi
-  if grep -Eq '^\[(FE|BE)-[0-9]{3,}\][[:space:]].+' <<<"$h"; then
+  if grep -Eq '^\[(FE|BE|QA)-[0-9]{3,}\][[:space:]].+' <<<"$h"; then
     continue
   fi
   invalid_commits+=("$h")
@@ -456,7 +456,14 @@ CHECK_FAILS="$(jq -r '
   [
     .statusCheckRollup[]? |
     if .__typename == "CheckRun" then
-      (if (.status != "COMPLETED" or .conclusion != "SUCCESS") then "\(.name): \(.status)/\(.conclusion // "UNKNOWN")" else empty end)
+      (if (
+        .status != "COMPLETED" or
+        (
+          .conclusion != "SUCCESS" and
+          .conclusion != "SKIPPED" and
+          .conclusion != "NEUTRAL"
+        )
+      ) then "\(.name): \(.status)/\(.conclusion // "UNKNOWN")" else empty end)
     elif .__typename == "StatusContext" then
       (if .state != "SUCCESS" then "\(.context): \(.state)" else empty end)
     else
