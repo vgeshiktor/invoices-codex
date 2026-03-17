@@ -43,6 +43,8 @@ echo "SaaS API is up"
 ```bash
 export BASE_URL=http://127.0.0.1:8081
 export DEMO_TENANT_NAME="Stakeholder Demo Tenant"
+export DEMO_ADMIN_EMAIL="owner@example.test"
+export DEMO_ADMIN_PASSWORD="secret-123"
 export FILE_PATH="/absolute/path/to/invoice.pdf"
 ```
 
@@ -86,6 +88,39 @@ TENANT_API_KEY=$(jq -r '.api_key.plain_text' <<<"$BOOTSTRAP_JSON")
 
 echo "TENANT_ID=$TENANT_ID"
 echo "TENANT_API_KEY=$TENANT_API_KEY"
+```
+
+## 6.1) Control Plane: Bootstrap First Tenant Admin User
+
+```bash
+RESP=$(curl -sS -X POST "$BASE_URL/v1/control-plane/tenants/$TENANT_ID/bootstrap-user" \
+  -H "X-Control-Plane-Key: $SAAS_CONTROL_PLANE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "X-Actor: demo-admin" \
+  -d "{\"email\":\"$DEMO_ADMIN_EMAIL\",\"password\":\"$DEMO_ADMIN_PASSWORD\",\"full_name\":\"Demo Owner\"}" \
+  -w $'\n%{http_code}') || {
+    echo "First-user bootstrap request failed (network/connection error)."
+    exit 1
+  }
+
+HTTP_CODE="${RESP##*$'\n'}"
+FIRST_USER_JSON="${RESP%$'\n'*}"
+
+if [[ "$HTTP_CODE" != "201" ]]; then
+  echo "First-user bootstrap failed with HTTP $HTTP_CODE"
+  echo "$FIRST_USER_JSON"
+  exit 1
+fi
+
+if ! jq -e '.user.id and .membership.id and .membership.role == "admin"' >/dev/null <<<"$FIRST_USER_JSON"; then
+  echo "Unexpected first-user bootstrap payload."
+  echo "$FIRST_USER_JSON"
+  exit 1
+fi
+
+echo "$FIRST_USER_JSON" | jq .
+echo "DEMO_ADMIN_EMAIL=$DEMO_ADMIN_EMAIL"
+echo "DEMO_ADMIN_PASSWORD=$DEMO_ADMIN_PASSWORD"
 ```
 
 ## 7) Control Plane: List Tenants
@@ -364,6 +399,7 @@ curl -fsS "$BASE_URL/metrics" | head -n 30
 ## 15) Close with Value Summary
 
 - Tenant onboarding is now API-driven via control-plane endpoints.
+- First tenant admin user is bootstrapped through a control-plane-only endpoint.
 - Runtime is async and queue-backed (Redis + RQ worker).
 - End-to-end flow is working: onboarding -> upload -> parse -> report -> download.
 - Operational visibility exists through Swagger, dashboard, and metrics.

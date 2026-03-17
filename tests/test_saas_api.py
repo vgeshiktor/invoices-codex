@@ -278,6 +278,7 @@ def test_openapi_exposes_api_key_security_scheme(tmp_path: Path) -> None:
     assert "/v1/providers/{provider_id}/test-connection" in body["paths"]
     assert "/v1/collection-jobs" in body["paths"]
     assert "/v1/control-plane/tenants" in body["paths"]
+    assert "/v1/control-plane/tenants/{tenant_id}/bootstrap-user" in body["paths"]
     assert body["paths"]["/v1/files"]["post"]["security"] == [{"ApiKeyAuth": []}]
     assert body["paths"]["/v1/providers"]["get"]["security"] == [{"ApiKeyAuth": []}]
     assert body["paths"]["/v1/providers/{provider_id}/oauth/start"]["post"][
@@ -301,6 +302,9 @@ def test_openapi_exposes_api_key_security_scheme(tmp_path: Path) -> None:
     assert body["paths"]["/v1/control-plane/tenants"]["get"]["security"] == [
         {"ControlPlaneKeyAuth": []}
     ]
+    assert body["paths"]["/v1/control-plane/tenants/{tenant_id}/bootstrap-user"]["post"][
+        "security"
+    ] == [{"ControlPlaneKeyAuth": []}]
 
 
 def test_admin_api_key_management_and_dashboard_summary(tmp_path: Path) -> None:
@@ -786,8 +790,62 @@ def test_control_plane_tenant_bootstrap_and_listing(tmp_path: Path) -> None:
     assert "Demo Tenant" in names
 
 
+def test_control_plane_first_user_bootstrap(tmp_path: Path) -> None:
+    client, _api_key, _tenant_id = _client(
+        tmp_path, control_plane_api_key="cp-demo-key"
+    )
+    headers = {"X-Control-Plane-Key": "cp-demo-key", "X-Actor": "platform-admin"}
+
+    create_tenant = client.post(
+        "/v1/control-plane/tenants", headers=headers, json={"name": "First User Tenant"}
+    )
+    assert create_tenant.status_code == 201
+    create_tenant_body = create_tenant.json()
+    bootstrap_tenant_id = create_tenant_body["tenant"]["id"]
+    bootstrap_tenant_slug = create_tenant_body["tenant"]["slug"]
+
+    first_user = client.post(
+        f"/v1/control-plane/tenants/{bootstrap_tenant_id}/bootstrap-user",
+        headers=headers,
+        json={
+            "email": "owner@example.test",
+            "password": "secret-123",
+            "full_name": "Owner User",
+        },
+    )
+    assert first_user.status_code == 201
+    first_user_body = first_user.json()
+    assert first_user_body["tenant_id"] == bootstrap_tenant_id
+    assert first_user_body["user"]["email"] == "owner@example.test"
+    assert first_user_body["membership"]["role"] == "admin"
+    assert first_user_body["membership"]["status"] == "active"
+
+    duplicate = client.post(
+        f"/v1/control-plane/tenants/{bootstrap_tenant_id}/bootstrap-user",
+        headers=headers,
+        json={
+            "email": "owner@example.test",
+            "password": "secret-123",
+        },
+    )
+    assert duplicate.status_code == 409
+    assert duplicate.json()["detail"] == "tenant already has users"
+
+    login = client.post(
+        "/auth/login",
+        json={
+            "email": "owner@example.test",
+            "password": "secret-123",
+            "tenant_slug": bootstrap_tenant_slug,
+        },
+    )
+    assert login.status_code == 200
+    assert login.json()["user"]["role"] == "admin"
+    assert login.json()["tenant"]["id"] == bootstrap_tenant_id
+
+
 def test_control_plane_key_enforcement(tmp_path: Path) -> None:
-    enabled_client, _api_key, _tenant_id = _client(
+    enabled_client, _api_key, tenant_id = _client(
         tmp_path, control_plane_api_key="cp-secret"
     )
     unauthorized = enabled_client.get(
@@ -795,10 +853,21 @@ def test_control_plane_key_enforcement(tmp_path: Path) -> None:
         headers={"X-Control-Plane-Key": "wrong-secret"},
     )
     assert unauthorized.status_code == 401
+    unauthorized_bootstrap_user = enabled_client.post(
+        f"/v1/control-plane/tenants/{tenant_id}/bootstrap-user",
+        headers={"X-Control-Plane-Key": "wrong-secret"},
+        json={"email": "ops@example.test", "password": "secret-123"},
+    )
+    assert unauthorized_bootstrap_user.status_code == 401
 
     disabled_client, _api_key_disabled, _tenant_id_disabled = _client(tmp_path)
     disabled = disabled_client.get("/v1/control-plane/tenants")
     assert disabled.status_code == 503
+    disabled_bootstrap_user = disabled_client.post(
+        f"/v1/control-plane/tenants/{tenant_id}/bootstrap-user",
+        json={"email": "ops@example.test", "password": "secret-123"},
+    )
+    assert disabled_bootstrap_user.status_code == 503
 
 
 def test_auth_login_me_refresh_logout_flow(tmp_path: Path) -> None:

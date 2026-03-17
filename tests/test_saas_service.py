@@ -92,6 +92,32 @@ def test_create_tenant_user_existing_user_requires_password_match(
         )
 
 
+def test_bootstrap_tenant_admin_user_requires_empty_tenant(tmp_path: Path) -> None:
+    service, _queue = _build_service(tmp_path)
+    tenant, _ = service.bootstrap_tenant("Tenant A")
+
+    user, membership = service.bootstrap_tenant_admin_user(
+        tenant_id=tenant.id,
+        email="ops@example.test",
+        password="secret-123",
+        full_name="Ops User",
+        actor="platform-admin",
+    )
+    assert user.email_normalized == "ops@example.test"
+    assert membership.tenant_id == tenant.id
+    assert membership.role == "admin"
+    assert membership.status == "active"
+
+    with pytest.raises(ValueError, match="tenant already has users"):
+        service.bootstrap_tenant_admin_user(
+            tenant_id=tenant.id,
+            email="ops@example.test",
+            password="secret-123",
+            full_name="Ops User",
+            actor="platform-admin",
+        )
+
+
 def test_provider_config_crud_and_tenant_isolation(tmp_path: Path) -> None:
     service, _queue = _build_service(tmp_path)
     tenant_a, _ = service.bootstrap_tenant("Tenant A")
