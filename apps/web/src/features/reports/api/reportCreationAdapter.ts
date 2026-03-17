@@ -1,10 +1,5 @@
 import { apiClient, normalizeApiError, type ApiError } from '../../../shared/api/client';
-import {
-  createReportV1ReportsPost,
-  getReportV1ReportsReportIdGet,
-  listReportsV1ReportsGet,
-  retryReportV1ReportsReportIdRetryPost,
-} from '../../../shared/api/generated';
+import { getRuntimeAuthHeaders } from '../../../shared/api/runtimeAuth';
 import {
   REPORT_FORMATS,
   type CreateReportInput,
@@ -127,13 +122,17 @@ const parseReportsList = (value: unknown): ReportItem[] => {
 export const reportCreationAdapter: ReportCreationAdapter = {
   createReport: async (input) => {
     try {
-      const result = await createReportV1ReportsPost({
+      const result = await apiClient.post<unknown, unknown>({
         body: {
           filters: input.filters,
           formats: input.formats,
           parse_job_ids: input.parseJobIds,
         },
-        client: apiClient,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(getRuntimeAuthHeaders() ?? {}),
+        },
+        url: '/v1/reports',
       });
 
       if (result.error !== undefined) {
@@ -167,11 +166,9 @@ export const reportCreationAdapter: ReportCreationAdapter = {
 
   getReport: async (reportId) => {
     try {
-      const result = await getReportV1ReportsReportIdGet({
-        client: apiClient,
-        path: {
-          report_id: reportId,
-        },
+      const result = await apiClient.get<unknown, unknown>({
+        headers: getRuntimeAuthHeaders(),
+        url: `/v1/reports/${encodeURIComponent(reportId)}`,
       });
 
       if (result.error !== undefined) {
@@ -205,8 +202,9 @@ export const reportCreationAdapter: ReportCreationAdapter = {
 
   listReports: async () => {
     try {
-      const result = await listReportsV1ReportsGet({
-        client: apiClient,
+      const result = await apiClient.get<unknown, unknown>({
+        headers: getRuntimeAuthHeaders(),
+        url: '/v1/reports',
       });
 
       if (result.error !== undefined) {
@@ -230,11 +228,9 @@ export const reportCreationAdapter: ReportCreationAdapter = {
 
   retryReport: async (reportId) => {
     try {
-      const result = await retryReportV1ReportsReportIdRetryPost({
-        client: apiClient,
-        path: {
-          report_id: reportId,
-        },
+      const result = await apiClient.post<unknown, unknown>({
+        headers: getRuntimeAuthHeaders(),
+        url: `/v1/reports/${encodeURIComponent(reportId)}/retry`,
       });
 
       if (result.error !== undefined) {

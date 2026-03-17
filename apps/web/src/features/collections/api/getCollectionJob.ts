@@ -1,4 +1,5 @@
 import { apiClient, normalizeApiError, type ApiError } from '../../../shared/api/client';
+import { getRuntimeAuthHeaders } from '../../../shared/api/runtimeAuth';
 import type { CollectionJob, CollectionJobStatus, CollectionProvider } from './createCollectionJob';
 
 export type GetCollectionJobResult =
@@ -89,7 +90,7 @@ export const getCollectionJob = async (
 ): Promise<GetCollectionJobResult> => {
   try {
     const result = await apiClient.get<CollectionJob, unknown>({
-      security: [{ name: 'X-API-Key', type: 'apiKey' }],
+      headers: getRuntimeAuthHeaders(),
       url: `/v1/collection-jobs/${collectionJobId}`,
     });
 
