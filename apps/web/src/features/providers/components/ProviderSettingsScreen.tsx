@@ -6,7 +6,13 @@ import {
   providerSettingsAdapter,
   type ProviderSettingsAdapter,
 } from '../api/providerSettingsAdapter';
-import type { ProviderAction, ProviderSettingsItem, ProviderType } from '../model/providerSettings';
+import type {
+  ProviderAction,
+  ProviderConnectionTestResult,
+  ProviderConnectionTestStatus,
+  ProviderSettingsItem,
+  ProviderType,
+} from '../model/providerSettings';
 
 const connectionLabel: Record<ProviderSettingsItem['connectionStatus'], string> = {
   connected: 'Connected',
@@ -14,16 +20,23 @@ const connectionLabel: Record<ProviderSettingsItem['connectionStatus'], string> 
   error: 'Error',
 };
 
+const testStatusLabel: Record<ProviderConnectionTestStatus, string> = {
+  failure: 'Failure',
+  success: 'Success',
+};
+
 const actionLabel: Record<ProviderAction, string> = {
   connect: 'Connect',
   disconnect: 'Disconnect',
   reauth: 'Re-auth',
+  testConnection: 'Test connection',
 };
 
 const pendingActionLabel: Record<ProviderAction, string> = {
   connect: 'Connecting...',
   disconnect: 'Disconnecting...',
   reauth: 'Re-authorizing...',
+  testConnection: 'Testing...',
 };
 
 const upsertProvider = (
@@ -68,6 +81,9 @@ export function ProviderSettingsScreen({
   const [providers, setProviders] = useState<ProviderSettingsItem[]>(createDefaultProviderItems);
   const [loadError, setLoadError] = useState<ApiError | null>(null);
   const [actionError, setActionError] = useState<ApiError | null>(null);
+  const [testResults, setTestResults] = useState<
+    Partial<Record<ProviderType, ProviderConnectionTestResult>>
+  >({});
   const [pendingActions, setPendingActions] = useState<Partial<Record<ProviderType, ProviderAction>>>(
     {},
   );
@@ -79,6 +95,7 @@ export function ProviderSettingsScreen({
     try {
       const response = await adapter.listProviders();
       setProviders(toSortedProviders(mergeWithDefaultProviders(response)));
+      setTestResults({});
       setLoadState('ready');
     } catch (error) {
       setLoadError(await normalizeApiError(error));
@@ -95,6 +112,15 @@ export function ProviderSettingsScreen({
     setPendingActions((currentPendingActions) => ({ ...currentPendingActions, [providerType]: action }));
 
     try {
+      if (action === 'testConnection') {
+        const result = await adapter.testProviderConnection(providerType);
+        setProviders((currentProviders) =>
+          toSortedProviders(upsertProvider(currentProviders, result.provider)),
+        );
+        setTestResults((currentResults) => ({ ...currentResults, [providerType]: result }));
+        return;
+      }
+
       let updatedProvider: ProviderSettingsItem;
       if (action === 'connect') {
         updatedProvider = await adapter.connectProvider(providerType);
@@ -164,6 +190,7 @@ export function ProviderSettingsScreen({
             {providers.map((provider) => {
               const pendingAction = pendingActions[provider.providerType];
               const isBusy = pendingAction !== undefined;
+              const testResult = testResults[provider.providerType];
 
               return (
                 <article
@@ -187,6 +214,19 @@ export function ProviderSettingsScreen({
                   )}
 
                   <div className="provider-card__actions">
+                    <button
+                      className="app__button"
+                      disabled={isBusy}
+                      onClick={() => {
+                        void runProviderAction(provider.providerType, 'testConnection');
+                      }}
+                      type="button"
+                    >
+                      {pendingAction === 'testConnection'
+                        ? pendingActionLabel.testConnection
+                        : actionLabel.testConnection}
+                    </button>
+
                     {provider.connectionStatus === 'disconnected' && (
                       <button
                         className="app__button"
@@ -231,6 +271,23 @@ export function ProviderSettingsScreen({
                       </>
                     )}
                   </div>
+
+                  {testResult && (
+                    <section
+                      aria-live="polite"
+                      className={
+                        testResult.status === 'failure' ? 'app__panel app__panel--error' : 'app__panel'
+                      }
+                      data-testid={`provider-test-result-${provider.providerType}`}
+                    >
+                      <p>
+                        <strong>Last test:</strong> {testStatusLabel[testResult.status]}
+                      </p>
+                      <p>{testResult.message}</p>
+                      <p>Tested at: {new Date(testResult.testedAt).toLocaleString()}</p>
+                      {testResult.requestId && <p>request-id: {testResult.requestId}</p>}
+                    </section>
+                  )}
                 </article>
               );
             })}

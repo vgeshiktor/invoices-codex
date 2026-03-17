@@ -1,13 +1,19 @@
 import { AUTH_ACCESS_TOKEN_STORAGE_KEY } from '../../../app/authSession.constants';
 import { normalizeApiError } from '../../../shared/api/client';
 import { frontendEnv } from '../../../shared/config/env';
-import type { ProviderSettingsItem, ProviderType } from '../model/providerSettings';
+import type {
+  ProviderConnectionTestResult,
+  ProviderConnectionTestStatus,
+  ProviderSettingsItem,
+  ProviderType,
+} from '../model/providerSettings';
 
 export interface ProviderSettingsAdapter {
   listProviders: () => Promise<ProviderSettingsItem[]>;
   connectProvider: (providerType: ProviderType) => Promise<ProviderSettingsItem>;
   disconnectProvider: (providerType: ProviderType) => Promise<ProviderSettingsItem>;
   reauthProvider: (providerType: ProviderType) => Promise<ProviderSettingsItem>;
+  testProviderConnection: (providerType: ProviderType) => Promise<ProviderConnectionTestResult>;
 }
 
 interface ProviderApiItem {
@@ -26,6 +32,14 @@ interface ProviderListResponse {
 interface ProviderOAuthStartResponse {
   provider: ProviderApiItem;
   authorization_url?: string;
+}
+
+interface ProviderConnectionTestApiResponse {
+  provider: ProviderApiItem;
+  status: ProviderConnectionTestStatus;
+  message: string;
+  tested_at: string;
+  request_id?: string | null;
 }
 
 const PROVIDER_ORDER: ProviderType[] = ['gmail', 'outlook'];
@@ -136,6 +150,34 @@ const parseProviderItem = (value: unknown): ProviderSettingsItem => {
   throw new Error('Malformed provider response from API');
 };
 
+const isProviderConnectionTestStatus = (
+  value: unknown,
+): value is ProviderConnectionTestStatus => value === 'success' || value === 'failure';
+
+const parseProviderConnectionTestResult = (value: unknown): ProviderConnectionTestResult => {
+  if (!value || typeof value !== 'object') {
+    throw new Error('Malformed provider test response from API');
+  }
+
+  const record = value as ProviderConnectionTestApiResponse;
+  if (
+    !isProviderApiItem(record.provider) ||
+    !isProviderConnectionTestStatus(record.status) ||
+    typeof record.message !== 'string' ||
+    typeof record.tested_at !== 'string'
+  ) {
+    throw new Error('Malformed provider test response from API');
+  }
+
+  return {
+    message: record.message,
+    provider: mapProvider(record.provider),
+    requestId: typeof record.request_id === 'string' ? record.request_id : null,
+    status: record.status,
+    testedAt: record.tested_at,
+  };
+};
+
 const buildRedirectUri = (): string => {
   if (typeof window === 'undefined') {
     return 'http://127.0.0.1:4173/providers';
@@ -242,6 +284,17 @@ export const createProviderSettingsApiAdapter = (
 
       return parseProviderItem(response);
     },
+    testProviderConnection: async (providerType) => {
+      const providerId = await getProviderId(providerType);
+      const response = await requestJson(
+        `/v1/providers/${encodeURIComponent(providerId)}/test-connection`,
+        {
+          method: 'POST',
+        },
+      );
+
+      return parseProviderConnectionTestResult(response);
+    },
   };
 };
 
@@ -292,6 +345,47 @@ export const createLocalProviderSettingsAdapter = (): ProviderSettingsAdapter =>
           : currentProvider,
       );
       return cloneProvider(findProviderByType(providers, providerType));
+    },
+    testProviderConnection: async (providerType) => {
+      const provider = findProviderByType(providers, providerType);
+      const testedAt = nowIso();
+
+      if (provider.connectionStatus === 'disconnected') {
+        providers = providers.map((currentProvider) =>
+          currentProvider.providerType === providerType
+            ? {
+                ...currentProvider,
+                lastErrorMessage: 'provider is not connected',
+                updatedAt: testedAt,
+              }
+            : currentProvider,
+        );
+        return {
+          message: 'provider is not connected',
+          provider: cloneProvider(findProviderByType(providers, providerType)),
+          requestId: null,
+          status: 'failure',
+          testedAt,
+        };
+      }
+
+      providers = providers.map((currentProvider) =>
+        currentProvider.providerType === providerType
+          ? {
+              ...currentProvider,
+              connectionStatus: 'connected',
+              lastErrorMessage: null,
+              updatedAt: testedAt,
+            }
+          : currentProvider,
+      );
+      return {
+        message: 'provider connection verified',
+        provider: cloneProvider(findProviderByType(providers, providerType)),
+        requestId: null,
+        status: 'success',
+        testedAt,
+      };
     },
   };
 };

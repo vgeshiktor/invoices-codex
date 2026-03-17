@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { ProviderSettingsScreen } from './ProviderSettingsScreen';
 import type { ProviderSettingsAdapter } from '../api/providerSettingsAdapter';
 import type {
+  ProviderConnectionTestResult,
   ProviderConnectionStatus,
   ProviderSettingsItem,
   ProviderType,
@@ -28,6 +29,7 @@ const buildAdapter = (
     disconnectProvider: ProviderSettingsAdapter['disconnectProvider'];
     listProviders: ProviderSettingsAdapter['listProviders'];
     reauthProvider: ProviderSettingsAdapter['reauthProvider'];
+    testProviderConnection: ProviderSettingsAdapter['testProviderConnection'];
   }>,
 ): ProviderSettingsAdapter => ({
   connectProvider:
@@ -40,6 +42,15 @@ const buildAdapter = (
   reauthProvider:
     overrides?.reauthProvider ??
     (async (providerType: ProviderType) => createProvider(providerType, 'connected')),
+  testProviderConnection:
+    overrides?.testProviderConnection ??
+    (async (providerType: ProviderType): Promise<ProviderConnectionTestResult> => ({
+      message: 'provider connection verified',
+      provider: createProvider(providerType, 'connected'),
+      requestId: 'req-test-1',
+      status: 'success',
+      testedAt: '2026-03-17T10:00:00.000Z',
+    })),
 });
 
 describe('ProviderSettingsScreen', () => {
@@ -113,6 +124,65 @@ describe('ProviderSettingsScreen', () => {
       expect(connectProvider).toHaveBeenCalledWith('gmail');
       expect(screen.getByRole('alert')).toHaveTextContent('oauth start failed');
       expect(within(gmailCard).getByRole('button', { name: 'Connect' })).toBeEnabled();
+    });
+  });
+
+  it('shows provider test-connection success status, message, and timestamp', async () => {
+    const testProviderConnection = vi
+      .fn<ProviderSettingsAdapter['testProviderConnection']>()
+      .mockResolvedValue({
+        message: 'provider connection verified',
+        provider: createProvider('gmail', 'connected'),
+        requestId: 'req-provider-test-ok',
+        status: 'success',
+        testedAt: '2026-03-17T10:01:00.000Z',
+      });
+    const adapter = buildAdapter(
+      [createProvider('gmail', 'connected'), createProvider('outlook', 'disconnected')],
+      { testProviderConnection },
+    );
+
+    render(<ProviderSettingsScreen adapter={adapter} />);
+
+    const gmailCard = await screen.findByTestId('provider-card-gmail');
+    await userEvent.click(within(gmailCard).getByRole('button', { name: 'Test connection' }));
+
+    await waitFor(() => {
+      expect(testProviderConnection).toHaveBeenCalledWith('gmail');
+      const resultPanel = within(gmailCard).getByTestId('provider-test-result-gmail');
+      expect(resultPanel).toHaveTextContent('Last test:');
+      expect(resultPanel).toHaveTextContent('Success');
+      expect(resultPanel).toHaveTextContent('provider connection verified');
+      expect(resultPanel).toHaveTextContent('Tested at:');
+    });
+  });
+
+  it('shows provider test-connection failure status and message', async () => {
+    const testProviderConnection = vi
+      .fn<ProviderSettingsAdapter['testProviderConnection']>()
+      .mockResolvedValue({
+        message: 'provider is not connected',
+        provider: createProvider('gmail', 'disconnected'),
+        requestId: 'req-provider-test-fail',
+        status: 'failure',
+        testedAt: '2026-03-17T10:02:00.000Z',
+      });
+    const adapter = buildAdapter(
+      [createProvider('gmail', 'disconnected'), createProvider('outlook', 'disconnected')],
+      { testProviderConnection },
+    );
+
+    render(<ProviderSettingsScreen adapter={adapter} />);
+
+    const gmailCard = await screen.findByTestId('provider-card-gmail');
+    await userEvent.click(within(gmailCard).getByRole('button', { name: 'Test connection' }));
+
+    await waitFor(() => {
+      expect(testProviderConnection).toHaveBeenCalledWith('gmail');
+      const resultPanel = within(gmailCard).getByTestId('provider-test-result-gmail');
+      expect(resultPanel).toHaveTextContent('Last test:');
+      expect(resultPanel).toHaveTextContent('Failure');
+      expect(resultPanel).toHaveTextContent('provider is not connected');
     });
   });
 });
