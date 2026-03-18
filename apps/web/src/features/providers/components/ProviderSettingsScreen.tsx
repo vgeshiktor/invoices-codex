@@ -81,9 +81,9 @@ export function ProviderSettingsScreen({
   const [providers, setProviders] = useState<ProviderSettingsItem[]>(createDefaultProviderItems);
   const [loadError, setLoadError] = useState<ApiError | null>(null);
   const [actionError, setActionError] = useState<ApiError | null>(null);
-  const [testResults, setTestResults] = useState<
-    Partial<Record<ProviderType, ProviderConnectionTestResult>>
-  >({});
+  const [testResults, setTestResults] = useState<Record<string, ProviderConnectionTestResult>>(
+    {},
+  );
   const [pendingActions, setPendingActions] = useState<Partial<Record<ProviderType, ProviderAction>>>(
     {},
   );
@@ -107,27 +107,33 @@ export function ProviderSettingsScreen({
     void loadProviders();
   }, [loadProviders]);
 
-  const runProviderAction = async (providerType: ProviderType, action: ProviderAction) => {
+  const runProviderAction = async (provider: ProviderSettingsItem, action: ProviderAction) => {
     setActionError(null);
-    setPendingActions((currentPendingActions) => ({ ...currentPendingActions, [providerType]: action }));
+    setPendingActions((currentPendingActions) => ({
+      ...currentPendingActions,
+      [provider.providerType]: action,
+    }));
 
     try {
       if (action === 'testConnection') {
-        const result = await adapter.testProviderConnection(providerType);
+        const result = await adapter.testConnection(provider);
         setProviders((currentProviders) =>
           toSortedProviders(upsertProvider(currentProviders, result.provider)),
         );
-        setTestResults((currentResults) => ({ ...currentResults, [providerType]: result }));
+        setTestResults((currentResults) => ({
+          ...currentResults,
+          [provider.id]: result,
+        }));
         return;
       }
 
       let updatedProvider: ProviderSettingsItem;
       if (action === 'connect') {
-        updatedProvider = await adapter.connectProvider(providerType);
+        updatedProvider = await adapter.connectProvider(provider);
       } else if (action === 'disconnect') {
-        updatedProvider = await adapter.disconnectProvider(providerType);
+        updatedProvider = await adapter.disconnectProvider(provider);
       } else {
-        updatedProvider = await adapter.reauthProvider(providerType);
+        updatedProvider = await adapter.reauthProvider(provider);
       }
 
       setProviders((currentProviders) =>
@@ -138,7 +144,7 @@ export function ProviderSettingsScreen({
     } finally {
       setPendingActions((currentPendingActions) => {
         const nextPendingActions = { ...currentPendingActions };
-        delete nextPendingActions[providerType];
+        delete nextPendingActions[provider.providerType];
         return nextPendingActions;
       });
     }
@@ -190,7 +196,7 @@ export function ProviderSettingsScreen({
             {providers.map((provider) => {
               const pendingAction = pendingActions[provider.providerType];
               const isBusy = pendingAction !== undefined;
-              const testResult = testResults[provider.providerType];
+              const testResult = testResults[provider.id];
 
               return (
                 <article
@@ -217,9 +223,9 @@ export function ProviderSettingsScreen({
                     <button
                       className="app__button"
                       disabled={isBusy}
-                      onClick={() => {
-                        void runProviderAction(provider.providerType, 'testConnection');
-                      }}
+                    onClick={() => {
+                      void runProviderAction(provider, 'testConnection');
+                    }}
                       type="button"
                     >
                       {pendingAction === 'testConnection'
@@ -231,9 +237,9 @@ export function ProviderSettingsScreen({
                       <button
                         className="app__button"
                         disabled={isBusy}
-                        onClick={() => {
-                          void runProviderAction(provider.providerType, 'connect');
-                        }}
+                          onClick={() => {
+                            void runProviderAction(provider, 'connect');
+                          }}
                         type="button"
                       >
                         {pendingAction === 'connect'
@@ -248,7 +254,7 @@ export function ProviderSettingsScreen({
                           className="app__button"
                           disabled={isBusy}
                           onClick={() => {
-                            void runProviderAction(provider.providerType, 'reauth');
+                            void runProviderAction(provider, 'reauth');
                           }}
                           type="button"
                         >
@@ -260,7 +266,7 @@ export function ProviderSettingsScreen({
                           className="app__button app__button--danger"
                           disabled={isBusy}
                           onClick={() => {
-                            void runProviderAction(provider.providerType, 'disconnect');
+                            void runProviderAction(provider, 'disconnect');
                           }}
                           type="button"
                         >

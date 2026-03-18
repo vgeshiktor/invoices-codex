@@ -10,6 +10,7 @@ export interface ProviderSettingsItem {
   connectionStatus: ProviderConnectionStatus;
   lastErrorMessage: string | null;
   updatedAt: string;
+  config: Record<string, unknown>;
 }
 
 export interface ProviderConnectionTestResult {

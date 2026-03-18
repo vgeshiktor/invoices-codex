@@ -1424,7 +1424,7 @@ class SaaSService:
                     raise
                 session.refresh(row)
                 self._normalize_provider_row_datetimes(row)
-                return row
+        return row
 
     def delete_provider_config(
         self,
@@ -1896,7 +1896,9 @@ class SaaSService:
                 )
                 is_disconnected = row.connection_status == "disconnected"
                 is_missing_token = not row.oauth_access_token_enc
-                token_expires_at = _coerce_utc(row.token_expires_at) if row.token_expires_at else None
+                token_expires_at = (
+                    _coerce_utc(row.token_expires_at) if row.token_expires_at else None
+                )
                 is_token_expired = bool(token_expires_at and token_expires_at <= now)
 
                 if is_disconnected or is_missing_token or is_token_expired:
